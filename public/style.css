@@ -295,5 +295,6 @@ html, body { width: 100%; height: 100%; background: #000; color: #fff;
 
 .guide-now-playing { font-size: 0.7rem; color: rgba(255,255,255,0.4); line-height: 1.3;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.guide-now-playing.live { color: #FF0000; }
+.guide-now-playing.live   { color: #FF0000; }
+.guide-now-playing.on-air { color: rgba(255,255,255,0.65); }
 #guide-grid.list-layout .guide-now-playing { flex: 1; -webkit-line-clamp: 1; }

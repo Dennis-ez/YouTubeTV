@@ -12,16 +12,16 @@ var TV = {
   currentVideo:  null,
   guideOpen:     false,
   muted:         true,
-  audioCtx:      null,
 
   // Each channel keeps a persistent "broadcast" that runs even while you're away.
   // Structure: { videoIndex, videoStartSec, broadcastStartMs }
   broadcasts:    {},
 
   // timers
-  badgeTimer:    null,
-  infoTimer:     null,
-  numberTimer:   null,
+  badgeTimer:        null,
+  infoTimer:         null,
+  numberTimer:       null,
+  _guideRefreshTimer: null,
   numberBuffer:  '',
   _tuneSeq:      0,
 
@@ -312,29 +312,6 @@ var TV = {
       }
     }
     requestAnimationFrame(draw);
-    this.playStaticSound();
-  },
-
-  playStaticSound: function() {
-    try {
-      if (!this.audioCtx) {
-        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      var ctx  = this.audioCtx;
-      var dur  = 0.3;
-      var buf  = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
-      var data = buf.getChannelData(0);
-      for (var i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-
-      var src  = ctx.createBufferSource();
-      src.buffer = buf;
-      var gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.25, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
-      src.connect(gain);
-      gain.connect(ctx.destination);
-      src.start();
-    } catch (e) { /* audio blocked */ }
   },
 
   // ── Mute ────────────────────────────────────────────────────────────────
@@ -391,12 +368,15 @@ var TV = {
     this.populateGuideNowPlaying();
     var active = el('guide-grid').querySelector('.guide-card.active');
     if (active) active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    var self = this;
+    this._guideRefreshTimer = setInterval(function() { self.populateGuideNowPlaying(); }, 30000);
   },
 
   closeGuide: function() {
     if (!this.guideOpen) return;
     this.guideOpen = false;
     el('guide-overlay').classList.remove('open');
+    clearInterval(this._guideRefreshTimer);
   },
 
   toggleGuide: function() { this.guideOpen ? this.closeGuide() : this.openGuide(); },
@@ -414,11 +394,23 @@ var TV = {
       var ch     = this.channels[i];
       var label  = cards[i].querySelector('.guide-now-playing');
       var cached = this.videoCache[ch.id];
-      if (cached && cached.length) {
+
+      label.classList.remove('live', 'on-air');
+
+      if (i === this.currentIndex && this.currentVideo) {
+        // Currently tuned here — show exact playing video
+        label.textContent = '▶ ' + this.currentVideo.title;
+        label.classList.add('live');
+      } else if (cached && cached.length && this.broadcasts[ch.id]) {
+        // Previously visited — broadcast clock is running, show what's airing now
+        var now = this.getBroadcastNow(ch.id, cached);
+        label.textContent = '▶ ' + now.video.title;
+        label.classList.add('on-air');
+      } else if (cached && cached.length) {
+        // Never visited — preview first unwatched video
         var unwatched = cached.filter(function(v) { return !TV.watchedVideos.has(v.id); });
         var v = (unwatched.length ? unwatched : cached)[0];
         label.textContent = v.title;
-        label.classList.remove('live');
       } else if (cached) {
         label.textContent = 'No videos available';
       } else {
@@ -426,14 +418,6 @@ var TV = {
         this.getChannelVideos(ch.id).then(function() {
           if (TV.guideOpen) TV.populateGuideNowPlaying();
         });
-      }
-    }
-    if (this.currentVideo && this.currentIndex >= 0) {
-      var card = el('guide-grid').querySelectorAll('.guide-card')[this.currentIndex];
-      if (card) {
-        var lbl = card.querySelector('.guide-now-playing');
-        lbl.textContent = '▶ ' + this.currentVideo.title;
-        lbl.classList.add('live');
       }
     }
   },
