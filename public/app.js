@@ -12,22 +12,27 @@ var TV = {
   currentVideo:  null,
   guideOpen:     false,
   muted:         true,
-  audioCtx:      null,
 
   // Each channel keeps a persistent "broadcast" that runs even while you're away.
   // Structure: { videoIndex, videoStartSec, broadcastStartMs }
   broadcasts:    {},
 
   // timers
-  badgeTimer:    null,
-  infoTimer:     null,
-  numberTimer:   null,
+  badgeTimer:        null,
+  infoTimer:         null,
+  numberTimer:       null,
+  _guideRefreshTimer: null,
+  _sleepTimer:       null,
+  _sleepOptions:     [0, 30, 60, 90],
+  _sleepIndex:       0,
+  shortcutsOpen:     false,
   numberBuffer:  '',
   _tuneSeq:      0,
 
   // ── Boot ────────────────────────────────────────────────────────────────
 
   init: async function() {
+    this.loadSettings();
     var me = await api('/api/me');
     if (!me.authenticated) { show('login-screen'); return; }
 
@@ -90,8 +95,18 @@ var TV = {
 
     this.buildGuide();
     this.setupControls();
+    this.syncSettingsUI();
+    this.initPip();
 
-    this.currentIndex = Math.floor(Math.random() * this.channels.length);
+    // Restore saved volume
+    var savedVol = parseInt(lsGet('ytv_volume', '80'), 10);
+    el('ctrl-volume-slider').value = savedVol;
+    this.player.setVolume(savedVol);
+
+    // Restore last channel or start on a random one
+    var savedCh = parseInt(lsGet('ytv_lastCh', '-1'), 10);
+    this.currentIndex = (savedCh >= 0 && savedCh < this.channels.length)
+      ? savedCh : Math.floor(Math.random() * this.channels.length);
     await this.tuneToChannel(this.currentIndex, true);
 
     var self = this;
@@ -184,7 +199,7 @@ var TV = {
 
     // Commit
     this.currentIndex = i;
-    this.showBadge(i);
+    lsSet('ytv_lastCh', i);
 
     var channelId = this.channels[i].id;
 
@@ -192,6 +207,8 @@ var TV = {
     // calculate the current position from elapsed wall-clock time.
     this.initBroadcast(channelId, videos);
     var now = this.getBroadcastNow(channelId, videos);
+
+    this.showBadge(i, now.video);
 
     if (this.playerReady) {
       this.player.loadVideoById({ videoId: now.video.id, startSeconds: now.position });
@@ -260,10 +277,11 @@ var TV = {
 
   // ── UI helpers ───────────────────────────────────────────────────────────
 
-  showBadge: function(index) {
+  showBadge: function(index, video) {
     var ch = this.channels[index];
     setText('badge-number', 'CH ' + (index + 1));
     setText('badge-name', ch.title);
+    setText('badge-title', video ? video.title : '');
     el('channel-badge').classList.add('visible');
     clearTimeout(this.badgeTimer);
     this.badgeTimer = setTimeout(function() {
@@ -312,44 +330,6 @@ var TV = {
       }
     }
     requestAnimationFrame(draw);
-    this.playStaticSound();
-  },
-
-  playStaticSound: function() {
-    try {
-      if (!this.audioCtx) {
-        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      var ctx  = this.audioCtx;
-      var dur  = 0.3;
-      var buf  = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
-      var data = buf.getChannelData(0);
-      for (var i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-
-      var src  = ctx.createBufferSource();
-      src.buffer = buf;
-      var gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.25, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
-      src.connect(gain);
-      gain.connect(ctx.destination);
-      src.start();
-    } catch (e) { /* audio blocked */ }
-  },
-
-  // ── Mute ────────────────────────────────────────────────────────────────
-
-  toggleMute: function() {
-    if (!this.playerReady) return;
-    if (this.muted) {
-      this.player.unMute();
-      this.player.setVolume(80);
-      this.muted = false;
-      el('unmute-prompt').classList.remove('visible');
-    } else {
-      this.player.mute();
-      this.muted = true;
-    }
   },
 
   // ── Channel Guide ────────────────────────────────────────────────────────
@@ -357,6 +337,7 @@ var TV = {
   buildGuide: function() {
     var grid = el('guide-grid');
     grid.innerHTML = '';
+    grid.classList.toggle('list-layout', !this.guideIsGrid);
     for (var i = 0; i < this.channels.length; i++) {
       var ch   = this.channels[i];
       var card = document.createElement('div');
@@ -370,7 +351,8 @@ var TV = {
             '<div class="guide-ch-name">' + escHtml(ch.title) + '</div>' +
           '</div>' +
         '</div>' +
-        '<div class="guide-now-playing" data-ch="' + escHtml(ch.id) + '">Loading…</div>';
+        '<div class="guide-now-playing" data-ch="' + escHtml(ch.id) + '">Loading…</div>' +
+        '<div class="guide-progress"><div class="guide-progress-fill"></div></div>';
 
       (function(idx) {
         card.addEventListener('click', function() {
@@ -391,12 +373,15 @@ var TV = {
     this.populateGuideNowPlaying();
     var active = el('guide-grid').querySelector('.guide-card.active');
     if (active) active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    var self = this;
+    this._guideRefreshTimer = setInterval(function() { self.populateGuideNowPlaying(); }, 30000);
   },
 
   closeGuide: function() {
     if (!this.guideOpen) return;
     this.guideOpen = false;
     el('guide-overlay').classList.remove('open');
+    clearInterval(this._guideRefreshTimer);
   },
 
   toggleGuide: function() { this.guideOpen ? this.closeGuide() : this.openGuide(); },
@@ -413,12 +398,29 @@ var TV = {
     for (var i = 0; i < cards.length; i++) {
       var ch     = this.channels[i];
       var label  = cards[i].querySelector('.guide-now-playing');
+      var fill   = cards[i].querySelector('.guide-progress-fill');
       var cached = this.videoCache[ch.id];
-      if (cached && cached.length) {
+      var pct    = 0;
+
+      label.classList.remove('live', 'on-air');
+
+      if (i === this.currentIndex && this.currentVideo) {
+        label.textContent = '▶ ' + this.currentVideo.title;
+        label.classList.add('live');
+        if (this.playerReady && this.player.getDuration) {
+          var dur = this.player.getDuration() || 0;
+          var cur = this.player.getCurrentTime ? this.player.getCurrentTime() : 0;
+          pct = dur ? (cur / dur) * 100 : 0;
+        }
+      } else if (cached && cached.length && this.broadcasts[ch.id]) {
+        var now = this.getBroadcastNow(ch.id, cached);
+        label.textContent = '▶ ' + now.video.title;
+        label.classList.add('on-air');
+        pct = now.video.duration ? (now.position / now.video.duration) * 100 : 0;
+      } else if (cached && cached.length) {
         var unwatched = cached.filter(function(v) { return !TV.watchedVideos.has(v.id); });
         var v = (unwatched.length ? unwatched : cached)[0];
         label.textContent = v.title;
-        label.classList.remove('live');
       } else if (cached) {
         label.textContent = 'No videos available';
       } else {
@@ -427,14 +429,8 @@ var TV = {
           if (TV.guideOpen) TV.populateGuideNowPlaying();
         });
       }
-    }
-    if (this.currentVideo && this.currentIndex >= 0) {
-      var card = el('guide-grid').querySelectorAll('.guide-card')[this.currentIndex];
-      if (card) {
-        var lbl = card.querySelector('.guide-now-playing');
-        lbl.textContent = '▶ ' + this.currentVideo.title;
-        lbl.classList.add('live');
-      }
+
+      if (fill) fill.style.width = Math.min(100, Math.max(0, pct)) + '%';
     }
   },
 
@@ -500,6 +496,7 @@ var TV = {
 
   toggleStatic: function() {
     this.staticOn = !this.staticOn;
+    lsSet('ytv_static', this.staticOn);
     var btn = el('opt-static');
     btn.textContent = this.staticOn ? 'ON' : 'OFF';
     btn.classList.toggle('active', this.staticOn);
@@ -507,6 +504,7 @@ var TV = {
 
   toggleScanlines: function() {
     this.scanlinesOn = !this.scanlinesOn;
+    lsSet('ytv_scanlines', this.scanlinesOn);
     el('scanlines').classList.toggle('off', !this.scanlinesOn);
     var btn = el('opt-scanlines');
     btn.textContent = this.scanlinesOn ? 'ON' : 'OFF';
@@ -515,6 +513,7 @@ var TV = {
 
   toggleVignette: function() {
     this.vignetteOn = !this.vignetteOn;
+    lsSet('ytv_vignette', this.vignetteOn);
     el('vignette').classList.toggle('off', !this.vignetteOn);
     var btn = el('opt-vignette');
     btn.textContent = this.vignetteOn ? 'ON' : 'OFF';
@@ -523,6 +522,7 @@ var TV = {
 
   toggleGuideLayout: function() {
     this.guideIsGrid = !this.guideIsGrid;
+    lsSet('ytv_guide_layout', this.guideIsGrid ? 'grid' : 'list');
     el('guide-grid').classList.toggle('list-layout', !this.guideIsGrid);
     var btn = el('opt-guide-layout');
     btn.textContent = this.guideIsGrid ? 'Grid' : 'List';
@@ -603,11 +603,15 @@ var TV = {
 
   showControls: function() {
     el('controls-bar').classList.add('visible');
+    document.body.classList.remove('cursor-hidden');
     clearTimeout(this._ctrlHideTimer);
     var self = this;
     this._ctrlHideTimer = setTimeout(function() {
-      if (!self.settingsOpen) el('controls-bar').classList.remove('visible');
-    }, 4000);
+      if (!self.settingsOpen && !self.guideOpen && !self.shortcutsOpen) {
+        el('controls-bar').classList.remove('visible');
+        document.body.classList.add('cursor-hidden');
+      }
+    }, 3000);
   },
 
   // ── Mute ─────────────────────────────────────────────────────────────────
@@ -652,23 +656,30 @@ var TV = {
           e.preventDefault(); self.toggleMute(); break;
         case 'f': case 'F':
           e.preventDefault(); self.toggleFullscreen(); break;
+        case 'p': case 'P':
+          e.preventDefault(); self.togglePip(); break;
         case 's': case 'S':
           e.preventDefault(); self.shuffleChannel(); break;
         case 'n': case 'N':
           e.preventDefault(); self.skipVideo(); break;
         case 'c': case 'C':
           e.preventDefault(); self.toggleCaptions(); break;
+        case '?':
+          e.preventDefault(); self.toggleShortcuts(); break;
         case 'Escape':
-          self.closeGuide(); self.closeSettings(); break;
+          self.closeGuide(); self.closeSettings(); self.closeShortcuts(); break;
         default:
           if (/^[0-9]$/.test(e.key)) self.handleNumberKey(e.key);
       }
     });
 
-    // Click shield: unmute first, then toggle controls bar
+    // Click shield: unmute first, then close settings; double-click = fullscreen
     el('player-shield').addEventListener('click', function() {
       if (self.muted) { self.toggleMute(); return; }
       self.closeSettings();
+    });
+    el('player-shield').addEventListener('dblclick', function() {
+      self.toggleFullscreen();
     });
 
     // Controls bar buttons
@@ -685,12 +696,16 @@ var TV = {
       e.stopPropagation(); self.toggleSettings();
     });
     el('ctrl-fullscreen-btn').addEventListener('click', function() { self.toggleFullscreen(); });
+    el('ctrl-pip-btn').addEventListener('click',        function() { self.togglePip(); });
     el('guide-close').addEventListener('click',         function() { self.closeGuide(); });
+    el('shortcuts-close').addEventListener('click',     function() { self.closeShortcuts(); });
+    el('shortcuts-overlay').addEventListener('click',   function(e) { if (e.target === el('shortcuts-overlay')) self.closeShortcuts(); });
 
     // Volume slider
     el('ctrl-volume-slider').addEventListener('input', function() {
       if (!self.playerReady) return;
       var vol = parseInt(this.value, 10);
+      lsSet('ytv_volume', vol);
       self.player.setVolume(vol);
       if (vol === 0) {
         self.player.mute(); self.muted = true;
@@ -709,6 +724,7 @@ var TV = {
     el('opt-scanlines').addEventListener('click',    function() { self.toggleScanlines(); });
     el('opt-vignette').addEventListener('click',     function() { self.toggleVignette(); });
     el('opt-guide-layout').addEventListener('click', function() { self.toggleGuideLayout(); });
+    el('opt-sleep-timer').addEventListener('click',    function() { self.toggleSleepTimer(); });
     el('opt-reset-watched').addEventListener('click', function() { self.resetWatched(); });
     el('opt-signout').addEventListener('click', function() {
       api('/auth/logout', { method: 'POST' }).then(function() { location.reload(); });
@@ -765,6 +781,92 @@ var TV = {
     btn.textContent = 'Done!';
     setTimeout(function() { btn.textContent = 'Reset'; }, 2000);
   },
+
+  // ── Persistent settings ──────────────────────────────────────────────────
+
+  loadSettings: function() {
+    this.staticOn    = lsGet('ytv_static',       'true') === 'true';
+    this.scanlinesOn = lsGet('ytv_scanlines',    'true') === 'true';
+    this.vignetteOn  = lsGet('ytv_vignette',     'true') === 'true';
+    this.guideIsGrid = lsGet('ytv_guide_layout', 'grid') === 'grid';
+    el('scanlines').classList.toggle('off', !this.scanlinesOn);
+    el('vignette').classList.toggle('off', !this.vignetteOn);
+  },
+
+  syncSettingsUI: function() {
+    el('opt-static').textContent    = this.staticOn    ? 'ON'   : 'OFF';
+    el('opt-scanlines').textContent = this.scanlinesOn ? 'ON'   : 'OFF';
+    el('opt-vignette').textContent  = this.vignetteOn  ? 'ON'   : 'OFF';
+    el('opt-guide-layout').textContent = this.guideIsGrid ? 'Grid' : 'List';
+    el('opt-static').classList.toggle('active',    this.staticOn);
+    el('opt-scanlines').classList.toggle('active', this.scanlinesOn);
+    el('opt-vignette').classList.toggle('active',  this.vignetteOn);
+  },
+
+  // ── Sleep timer ──────────────────────────────────────────────────────────
+
+  toggleSleepTimer: function() {
+    clearTimeout(this._sleepTimer);
+    this._sleepIndex = (this._sleepIndex + 1) % this._sleepOptions.length;
+    var mins = this._sleepOptions[this._sleepIndex];
+    var btn  = el('opt-sleep-timer');
+    if (mins === 0) {
+      btn.textContent = 'Off';
+      btn.classList.remove('active');
+    } else {
+      btn.textContent = mins + 'm';
+      btn.classList.add('active');
+      var self = this;
+      this._sleepTimer = setTimeout(function() {
+        if (self.playerReady) self.player.pauseVideo();
+        self._sleepIndex = 0;
+        el('opt-sleep-timer').textContent = 'Off';
+        el('opt-sleep-timer').classList.remove('active');
+      }, mins * 60 * 1000);
+    }
+  },
+
+  // ── Picture in picture ───────────────────────────────────────────────────
+
+  initPip: function() {
+    if (!window.documentPictureInPicture) el('ctrl-pip-btn').style.display = 'none';
+  },
+
+  togglePip: async function() {
+    if (!window.documentPictureInPicture) return;
+    var btn = el('ctrl-pip-btn');
+    if (window.documentPictureInPicture.window) {
+      window.documentPictureInPicture.window.close();
+      return;
+    }
+    try {
+      var pipWin = await window.documentPictureInPicture.requestWindow({
+        width:  Math.round(window.innerWidth  * 0.36),
+        height: Math.round(window.innerHeight * 0.36),
+      });
+      var wrapper = el('player-wrapper');
+      pipWin.document.body.style.cssText = 'margin:0;background:#000;overflow:hidden';
+      pipWin.document.body.appendChild(wrapper);
+      btn.classList.add('active');
+      pipWin.addEventListener('pagehide', function() {
+        if (!el('tv').contains(wrapper)) el('tv').insertBefore(wrapper, el('tv').firstChild);
+        btn.classList.remove('active');
+      });
+    } catch(e) { console.warn('PiP:', e); }
+  },
+
+  // ── Shortcuts overlay ────────────────────────────────────────────────────
+
+  toggleShortcuts: function() {
+    this.shortcutsOpen = !this.shortcutsOpen;
+    el('shortcuts-overlay').classList.toggle('open', this.shortcutsOpen);
+  },
+
+  closeShortcuts: function() {
+    if (!this.shortcutsOpen) return;
+    this.shortcutsOpen = false;
+    el('shortcuts-overlay').classList.remove('open');
+  },
 };
 
 // ── YouTube IFrame API ready ─────────────────────────────────────────────────
@@ -776,6 +878,9 @@ window.onYouTubeIframeAPIReady = function() {
 };
 
 // ── Utilities ────────────────────────────────────────────────────────────────
+
+function lsGet(k, d) { try { var v = localStorage.getItem(k); return v === null ? d : v; } catch(e) { return d; } }
+function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch(e) {} }
 
 function el(id)        { return document.getElementById(id); }
 function setText(id,t) { el(id).textContent = t; }
