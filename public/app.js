@@ -1,52 +1,53 @@
 // ── YouTube TV ─────────────────────────────────────────────────────────────
 'use strict';
 
-const TV = {
+var TV = {
   // state
-  player:         null,
-  playerReady:    false,
-  channels:       [],      // all subscriptions
-  currentIndex:   -1,
-  watchedVideos:  new Set(),
-  videoCache:     {},      // channelId → [{id, title, duration, …}]
-  currentVideo:   null,
-  guideOpen:      false,
-  muted:          true,
-  audioCtx:       null,
+  player:        null,
+  playerReady:   false,
+  channels:      [],
+  currentIndex:  -1,
+  watchedVideos: new Set(),
+  videoCache:    {},
+  currentVideo:  null,
+  guideOpen:     false,
+  muted:         true,
+  audioCtx:      null,
+
+  // Each channel keeps a persistent "broadcast" that runs even while you're away.
+  // Structure: { videoIndex, videoStartSec, broadcastStartMs }
+  broadcasts:    {},
 
   // timers
-  badgeTimer:     null,
-  infoTimer:      null,
-  numberTimer:    null,
-  numberBuffer:   '',
+  badgeTimer:    null,
+  infoTimer:     null,
+  numberTimer:   null,
+  numberBuffer:  '',
+  _tuneSeq:      0,
 
-  // ── Boot ──────────────────────────────────────────────────────────────────
+  // ── Boot ────────────────────────────────────────────────────────────────
 
-  async init() {
-    const me = await api('/api/me');
+  init: async function() {
+    var me = await api('/api/me');
     if (!me.authenticated) { show('login-screen'); return; }
 
     show('loading-screen');
     setText('loading-msg', 'Loading your channels…');
 
     try {
-      const [{ watched }, { subscriptions }] = await Promise.all([
-        api('/api/watched'),
-        api('/api/subscriptions'),
-      ]);
+      var watchedData = await api('/api/watched');
+      var subsData    = await api('/api/subscriptions');
 
-      this.watchedVideos = new Set(watched);
-      this.channels = subscriptions;
+      this.watchedVideos = new Set(watchedData.watched);
+      this.channels      = subsData.subscriptions;
 
       if (!this.channels.length) {
         showError('No subscriptions found. Subscribe to some YouTube channels first!');
         return;
       }
 
-      setText('loading-msg', `Found ${this.channels.length} channels. Tuning in…`);
+      setText('loading-msg', 'Found ' + this.channels.length + ' channels. Tuning in…');
 
-      // Start the YouTube IFrame player; onYouTubeIframeAPIReady fires it
-      // (already in queue if the API loaded before init finished)
       if (window._ytAPIReady) this.createPlayer();
 
     } catch (err) {
@@ -55,224 +56,289 @@ const TV = {
     }
   },
 
-  createPlayer() {
+  createPlayer: function() {
     this.player = new YT.Player('youtube-player', {
       width:  '100%',
       height: '100%',
       playerVars: {
-        autoplay:        1,
-        controls:        0,
-        disablekb:       1,
-        enablejsapi:     1,
-        fs:              0,
-        iv_load_policy:  3,
-        modestbranding:  1,
-        playsinline:     1,
-        rel:             0,
+        autoplay:       1,
+        controls:       0,
+        disablekb:      1,
+        enablejsapi:    1,
+        fs:             0,
+        iv_load_policy: 3,
+        modestbranding: 1,
+        playsinline:    1,
+        rel:            0,
       },
       events: {
-        onReady:       () => this.onPlayerReady(),
-        onStateChange: (e) => this.onStateChange(e),
-        onError:       (e) => this.onPlayerError(e),
+        onReady:       function(e) { TV.onPlayerReady(); },
+        onStateChange: function(e) { TV.onStateChange(e); },
+        onError:       function(e) { TV.onPlayerError(e); },
       },
     });
   },
 
-  async onPlayerReady() {
+  onPlayerReady: async function() {
     this.playerReady = true;
-
-    // Must start muted so autoplay is allowed
     this.player.mute();
     this.muted = true;
 
     hide('loading-screen');
     show('tv');
 
-    // Build guide
     this.buildGuide();
     this.setupControls();
 
-    // Tune to a random starting channel
     this.currentIndex = Math.floor(Math.random() * this.channels.length);
-    await this.tuneToChannel(this.currentIndex, { skipStatic: true });
+    await this.tuneToChannel(this.currentIndex, true);
 
-    // Show unmute prompt after a beat
-    setTimeout(() => el('unmute-prompt').classList.add('visible'), 800);
+    var self = this;
+    setTimeout(function() { el('unmute-prompt').classList.add('visible'); }, 800);
   },
 
-  // ── Channel tuning ────────────────────────────────────────────────────────
+  // ── Broadcast engine ────────────────────────────────────────────────────
+  //
+  // Every channel has a persistent "broadcast" that keeps running even while
+  // you're watching something else.  On first visit we pick a starting video
+  // (preferring unwatched) and a random position inside it.  On every
+  // subsequent visit we calculate where the broadcast would be RIGHT NOW,
+  // advancing through videos as they finish.  This gives the authentic TV
+  // feel: you always join mid-stream, and if enough time has passed you'll
+  // catch a brand-new video you haven't seen yet.
 
-  async tuneToChannel(index, { skipStatic = false } = {}) {
-    index = ((index % this.channels.length) + this.channels.length) % this.channels.length;
-    this.currentIndex = index;
+  initBroadcast: function(channelId, videos) {
+    if (this.broadcasts[channelId]) return;   // already initialised
 
-    const channel = this.channels[index];
-    this.showBadge(index);
-
-    if (!skipStatic) {
-      this.playStaticEffect();
+    // Prefer an unwatched video as the starting point
+    var unwatched = videos.filter(function(v) { return !TV.watchedVideos.has(v.id); });
+    var pool      = unwatched.length ? unwatched : videos;
+    var startVid  = pool[Math.floor(Math.random() * pool.length)];
+    var startIdx  = 0;
+    for (var k = 0; k < videos.length; k++) {
+      if (videos[k].id === startVid.id) { startIdx = k; break; }
     }
 
-    // Fetch videos (cached after first call)
-    const videos = await this.getChannelVideos(channel.id);
+    // Random entry point: 5 – 70 % into the video (like joining a broadcast late)
+    var min = Math.floor(startVid.duration * 0.05);
+    var max = Math.floor(startVid.duration * 0.70);
+    var sec = min + Math.floor(Math.random() * Math.max(1, max - min));
 
-    if (!videos.length) {
-      // No playable videos — silently skip to next
-      await this.tuneToChannel(index + 1, { skipStatic: true });
-      return;
+    this.broadcasts[channelId] = {
+      videoIndex:      startIdx,
+      videoStartSec:   sec,
+      broadcastStartMs: Date.now(),
+    };
+  },
+
+  // Returns { video, position } representing where the channel is right now.
+  getBroadcastNow: function(channelId, videos) {
+    var b       = this.broadcasts[channelId];
+    var elapsed = (Date.now() - b.broadcastStartMs) / 1000;   // seconds since we pinned it
+    var pos     = b.videoStartSec + elapsed;
+    var idx     = b.videoIndex;
+
+    // Advance through the video list as videos finish
+    var laps = 0;
+    while (pos >= videos[idx].duration && laps < videos.length) {
+      pos  -= videos[idx].duration;
+      idx   = (idx + 1) % videos.length;
+      laps++;
     }
 
-    // Pick a video: prefer unwatched
-    const unwatched = videos.filter(v => !this.watchedVideos.has(v.id));
-    const pool  = unwatched.length ? unwatched : videos;
-    const video = pool[Math.floor(Math.random() * pool.length)];
+    // Safety: if somehow we looped the entire list, start the pinned video over
+    if (laps >= videos.length) { idx = b.videoIndex; pos = 0; }
 
-    // Random start: between 5 % and 70 % of duration
-    const start = randomBetween(
-      Math.floor(video.duration * 0.05),
-      Math.floor(video.duration * 0.70)
-    );
+    return { video: videos[idx], position: Math.floor(Math.max(0, pos)) };
+  },
+
+  // ── Channel tuning ──────────────────────────────────────────────────────
+
+  // dir: +1 = forward, -1 = backward (controls which way we skip empty channels)
+  tuneToChannel: async function(index, skipStatic, dir) {
+    var n = this.channels.length;
+    dir   = (dir !== undefined) ? dir : 1;
+    index = ((index % n) + n) % n;
+
+    // Cancellation token — rapid clicks cancel stale fetches
+    this._tuneSeq += 1;
+    var seq = this._tuneSeq;
+
+    if (!skipStatic) this.playStaticEffect();
+
+    // Walk in dir until we find a channel with playable videos
+    var tried  = 0;
+    var i      = index;
+    var videos = [];
+
+    while (tried < n) {
+      videos = await this.getChannelVideos(this.channels[i].id);
+      if (seq !== this._tuneSeq) return;   // cancelled — newer tune in progress
+      if (videos.length) break;
+      i = ((i + dir) % n + n) % n;
+      tried++;
+    }
+
+    if (!videos.length) { showError('No playable videos found in any channel.'); return; }
+
+    // Commit
+    this.currentIndex = i;
+    this.showBadge(i);
+
+    var channelId = this.channels[i].id;
+
+    // Initialise broadcast state on first visit; subsequent visits just
+    // calculate the current position from elapsed wall-clock time.
+    this.initBroadcast(channelId, videos);
+    var now = this.getBroadcastNow(channelId, videos);
 
     if (this.playerReady) {
-      this.player.loadVideoById({ videoId: video.id, startSeconds: start });
+      this.player.loadVideoById({ videoId: now.video.id, startSeconds: now.position });
     }
 
-    // Track as watched
-    this.watchedVideos.add(video.id);
-    api('/api/watched', { method: 'POST', body: { videoId: video.id } });
+    // Mark as watched so it won't be picked as a fresh start on another channel
+    if (!this.watchedVideos.has(now.video.id)) {
+      this.watchedVideos.add(now.video.id);
+      api('/api/watched', { method: 'POST', body: { videoId: now.video.id } });
+    }
 
-    this.currentVideo = video;
-    this.showInfoBar(channel, video);
+    this.currentVideo = now.video;
+    this.showInfoBar(this.channels[i], now.video);
     this.updateGuideActive();
+
+    // Re-apply captions state after video load
+    var self = this;
+    setTimeout(function() {
+      if (self.captionsOn && self.playerReady) {
+        self.player.loadModule('captions');
+        self.player.setOption('captions', 'track', { languageCode: 'en' });
+      } else if (self.playerReady) {
+        self.player.unloadModule('captions');
+      }
+    }, 1500);
   },
 
-  async getChannelVideos(channelId) {
+  getChannelVideos: async function(channelId) {
     if (this.videoCache[channelId]) return this.videoCache[channelId];
     try {
-      const data = await api(`/api/channel/${channelId}/videos`);
+      var data = await api('/api/channel/' + channelId + '/videos');
       this.videoCache[channelId] = data.videos || [];
-    } catch {
+    } catch (e) {
       this.videoCache[channelId] = [];
     }
     return this.videoCache[channelId];
   },
 
-  nextChannel() { this.tuneToChannel(this.currentIndex + 1); },
-  prevChannel() { this.tuneToChannel(this.currentIndex - 1); },
+  nextChannel: function() { this.tuneToChannel(this.currentIndex + 1, false,  1); },
+  prevChannel: function() { this.tuneToChannel(this.currentIndex - 1, false, -1); },
 
-  // ── Player events ─────────────────────────────────────────────────────────
+  // ── Player events ────────────────────────────────────────────────────────
 
-  onStateChange(e) {
-    // When current video ends, pick another on the same channel
+  onStateChange: function(e) {
     if (e.data === YT.PlayerState.ENDED) {
-      this.tuneToChannel(this.currentIndex);
+      // Re-tune to same channel — getBroadcastNow will have advanced past the
+      // finished video because elapsed time now exceeds its duration.
+      this.tuneToChannel(this.currentIndex, true, 1);
     }
   },
 
-  onPlayerError(e) {
-    // Unplayable video: load another on same channel
-    console.warn('Player error', e.data, '— loading next video on channel');
-    if (this.currentVideo) {
-      // Mark as "watched" so it won't be picked again immediately
-      this.watchedVideos.add(this.currentVideo.id);
+  onPlayerError: function(e) {
+    console.warn('Player error', e.data, '-- skipping');
+    // Nudge the broadcast clock forward so this broken video is skipped next visit too
+    var ch = this.channels[this.currentIndex];
+    if (ch && this.broadcasts[ch.id] && this.currentVideo) {
+      var b = this.broadcasts[ch.id];
+      var elapsed = (Date.now() - b.broadcastStartMs) / 1000;
+      // Advance past the current video by pretending it was longer than it was
+      b.videoStartSec   = 0;
+      b.videoIndex      = (b.videoIndex + 1) % (this.videoCache[ch.id] || [1]).length;
+      b.broadcastStartMs = Date.now();
     }
-    this.tuneToChannel(this.currentIndex);
+    this.tuneToChannel(this.currentIndex, true, 1);
   },
 
-  // ── UI helpers ────────────────────────────────────────────────────────────
+  // ── UI helpers ───────────────────────────────────────────────────────────
 
-  showBadge(index) {
-    const ch = this.channels[index];
-    setText('badge-number', `CH ${index + 1}`);
+  showBadge: function(index) {
+    var ch = this.channels[index];
+    setText('badge-number', 'CH ' + (index + 1));
     setText('badge-name', ch.title);
     el('channel-badge').classList.add('visible');
     clearTimeout(this.badgeTimer);
-    this.badgeTimer = setTimeout(() => el('channel-badge').classList.remove('visible'), 3500);
+    this.badgeTimer = setTimeout(function() {
+      el('channel-badge').classList.remove('visible');
+    }, 3500);
   },
 
-  showInfoBar(channel, video) {
-    el('info-thumb').src     = video.thumbnail || channel.thumbnail || '';
-    setText('info-channel', channel.title);
-    setText('info-title', video.title);
-
-    const bar  = el('info-bar');
-    const hint = el('controls-hint');
-    bar.classList.add('visible');
-    hint.classList.add('visible');
-
-    clearTimeout(this.infoTimer);
-    this.infoTimer = setTimeout(() => {
-      bar.classList.remove('visible');
-      hint.classList.remove('visible');
-    }, 5000);
+  showInfoBar: function(channel, video) {
+    // Update controls bar info
+    setText('ctrl-ch-label', 'CH ' + (this.currentIndex + 1) + ' · ' + channel.title);
+    setText('ctrl-title-label', video.title);
   },
 
-  // ── Static / noise effect ─────────────────────────────────────────────────
+  // ── Static / noise effect ────────────────────────────────────────────────
 
-  playStaticEffect() {
-    const canvas = el('static-canvas');
+  playStaticEffect: function() {
+    if (!this.staticOn) return;
+    var canvas  = el('static-canvas');
     canvas.width  = window.innerWidth;
     canvas.height = window.innerHeight;
-    canvas.style.display  = 'block';
-    canvas.style.opacity  = '1';
+    canvas.style.display    = 'block';
+    canvas.style.opacity    = '1';
     canvas.style.transition = '';
 
-    const ctx    = canvas.getContext('2d');
-    // Draw at 1/4 resolution and scale — looks more like TV static
-    const W = Math.ceil(canvas.width  / 4);
-    const H = Math.ceil(canvas.height / 4);
-    const imgData = ctx.createImageData(W, H);
+    var ctx  = canvas.getContext('2d');
+    var W    = Math.ceil(canvas.width  / 4);
+    var H    = Math.ceil(canvas.height / 4);
+    var img  = ctx.createImageData(W, H);
+    var frame = 0;
+    var maxF  = 18;
 
-    let frame  = 0;
-    const maxFrames = 18; // ~300 ms at 60 fps
-
-    const draw = () => {
-      const d = imgData.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const v = (Math.random() * 255) | 0;
+    function draw() {
+      var d = img.data;
+      for (var i = 0; i < d.length; i += 4) {
+        var v = (Math.random() * 255) | 0;
         d[i] = v; d[i+1] = v; d[i+2] = v; d[i+3] = 255;
       }
-      ctx.putImageData(imgData, 0, 0);
+      ctx.putImageData(img, 0, 0);
       ctx.drawImage(canvas, 0, 0, W, H, 0, 0, canvas.width, canvas.height);
-
-      if (++frame < maxFrames) {
+      if (++frame < maxF) {
         requestAnimationFrame(draw);
       } else {
         canvas.style.transition = 'opacity 0.25s';
         canvas.style.opacity = '0';
-        setTimeout(() => { canvas.style.display = 'none'; }, 300);
+        setTimeout(function() { canvas.style.display = 'none'; }, 300);
       }
-    };
+    }
     requestAnimationFrame(draw);
-
     this.playStaticSound();
   },
 
-  playStaticSound() {
+  playStaticSound: function() {
     try {
-      if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const ctx    = this.audioCtx;
-      const dur    = 0.3;
-      const rate   = ctx.sampleRate;
-      const buf    = ctx.createBuffer(1, rate * dur, rate);
-      const data   = buf.getChannelData(0);
-      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      if (!this.audioCtx) {
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      var ctx  = this.audioCtx;
+      var dur  = 0.3;
+      var buf  = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+      var data = buf.getChannelData(0);
+      for (var i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
 
-      const src  = ctx.createBufferSource();
+      var src  = ctx.createBufferSource();
       src.buffer = buf;
-
-      const gain = ctx.createGain();
+      var gain = ctx.createGain();
       gain.gain.setValueAtTime(0.25, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
-
-      src.connect(gain); gain.connect(ctx.destination);
+      src.connect(gain);
+      gain.connect(ctx.destination);
       src.start();
-    } catch { /* audio not available */ }
+    } catch (e) { /* audio blocked */ }
   },
 
-  // ── Mute toggle ───────────────────────────────────────────────────────────
+  // ── Mute ────────────────────────────────────────────────────────────────
 
-  toggleMute() {
+  toggleMute: function() {
     if (!this.playerReady) return;
     if (this.muted) {
       this.player.unMute();
@@ -285,209 +351,455 @@ const TV = {
     }
   },
 
-  unmuteOnFirstInteraction() {
-    if (this.muted) this.toggleMute();
-    el('unmute-prompt').classList.remove('visible');
-  },
+  // ── Channel Guide ────────────────────────────────────────────────────────
 
-  // ── Channel Guide ─────────────────────────────────────────────────────────
-
-  buildGuide() {
-    const grid = el('guide-grid');
+  buildGuide: function() {
+    var grid = el('guide-grid');
     grid.innerHTML = '';
-    this.channels.forEach((ch, i) => {
-      const card = document.createElement('div');
-      card.className = 'guide-card';
+    for (var i = 0; i < this.channels.length; i++) {
+      var ch   = this.channels[i];
+      var card = document.createElement('div');
+      card.className    = 'guide-card';
       card.dataset.index = i;
-      card.innerHTML = `
-        <div class="guide-card-top">
-          <img class="guide-thumb" src="${ch.thumbnail}" alt="" onerror="this.style.display='none'">
-          <div>
-            <div class="guide-ch-num">CH ${i + 1}</div>
-            <div class="guide-ch-name">${escHtml(ch.title)}</div>
-          </div>
-        </div>
-        <div class="guide-now-playing" data-ch="${ch.id}">Loading…</div>
-      `;
-      card.addEventListener('click', () => {
-        this.closeGuide();
-        this.tuneToChannel(i);
-      });
-      grid.appendChild(card);
-    });
+      card.innerHTML =
+        '<div class="guide-card-top">' +
+          '<img class="guide-thumb" src="' + escHtml(ch.thumbnail) + '" alt="" onerror="this.style.display=\'none\'">' +
+          '<div>' +
+            '<div class="guide-ch-num">CH ' + (i + 1) + '</div>' +
+            '<div class="guide-ch-name">' + escHtml(ch.title) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="guide-now-playing" data-ch="' + escHtml(ch.id) + '">Loading…</div>';
 
-    // Populate now-playing lazily when guide opens
+      (function(idx) {
+        card.addEventListener('click', function() {
+          TV.closeGuide();
+          TV.tuneToChannel(idx);
+        });
+      })(i);
+
+      grid.appendChild(card);
+    }
   },
 
-  openGuide() {
+  openGuide: function() {
     if (this.guideOpen) return;
     this.guideOpen = true;
     el('guide-overlay').classList.add('open');
     this.updateGuideActive();
     this.populateGuideNowPlaying();
-    // Scroll active card into view
-    const active = el('guide-grid').querySelector('.guide-card.active');
+    var active = el('guide-grid').querySelector('.guide-card.active');
     if (active) active.scrollIntoView({ block: 'center', behavior: 'smooth' });
   },
 
-  closeGuide() {
+  closeGuide: function() {
     if (!this.guideOpen) return;
     this.guideOpen = false;
     el('guide-overlay').classList.remove('open');
   },
 
-  toggleGuide() {
-    this.guideOpen ? this.closeGuide() : this.openGuide();
+  toggleGuide: function() { this.guideOpen ? this.closeGuide() : this.openGuide(); },
+
+  updateGuideActive: function() {
+    var cards = el('guide-grid').querySelectorAll('.guide-card');
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].classList.toggle('active', i === this.currentIndex);
+    }
   },
 
-  updateGuideActive() {
-    el('guide-grid').querySelectorAll('.guide-card').forEach((card, i) => {
-      card.classList.toggle('active', i === this.currentIndex);
-    });
-  },
-
-  populateGuideNowPlaying() {
-    el('guide-grid').querySelectorAll('.guide-card').forEach((card, i) => {
-      const ch = this.channels[i];
-      const label = card.querySelector('.guide-now-playing');
-      const cached = this.videoCache[ch.id];
+  populateGuideNowPlaying: function() {
+    var cards = el('guide-grid').querySelectorAll('.guide-card');
+    for (var i = 0; i < cards.length; i++) {
+      var ch     = this.channels[i];
+      var label  = cards[i].querySelector('.guide-now-playing');
+      var cached = this.videoCache[ch.id];
       if (cached && cached.length) {
-        const unwatched = cached.filter(v => !this.watchedVideos.has(v.id));
-        const v = (unwatched.length ? unwatched : cached)[0];
+        var unwatched = cached.filter(function(v) { return !TV.watchedVideos.has(v.id); });
+        var v = (unwatched.length ? unwatched : cached)[0];
         label.textContent = v.title;
         label.classList.remove('live');
       } else if (cached) {
         label.textContent = 'No videos available';
-        label.classList.remove('live');
       } else {
         label.textContent = 'Loading…';
-        // Prefetch asynchronously
-        this.getChannelVideos(ch.id).then(() => {
-          if (this.guideOpen) this.populateGuideNowPlaying();
+        this.getChannelVideos(ch.id).then(function() {
+          if (TV.guideOpen) TV.populateGuideNowPlaying();
         });
       }
-    });
-
-    // Show current video for current channel
+    }
     if (this.currentVideo && this.currentIndex >= 0) {
-      const card  = el('guide-grid').querySelectorAll('.guide-card')[this.currentIndex];
+      var card = el('guide-grid').querySelectorAll('.guide-card')[this.currentIndex];
       if (card) {
-        const label = card.querySelector('.guide-now-playing');
-        label.textContent = '▶ ' + this.currentVideo.title;
-        label.classList.add('live');
+        var lbl = card.querySelector('.guide-now-playing');
+        lbl.textContent = '▶ ' + this.currentVideo.title;
+        lbl.classList.add('live');
       }
     }
   },
 
-  // ── Number channel input ──────────────────────────────────────────────────
+  // ── Number input ──────────────────────────────────────────────────────────
 
-  handleNumberKey(digit) {
+  handleNumberKey: function(digit) {
     this.numberBuffer += digit;
-    const disp = el('number-input-display');
+    var disp = el('number-input-display');
     disp.textContent = this.numberBuffer;
     disp.classList.add('visible');
-
     clearTimeout(this.numberTimer);
-    this.numberTimer = setTimeout(() => {
-      const num = parseInt(this.numberBuffer, 10);
-      this.numberBuffer = '';
+    var self = this;
+    this.numberTimer = setTimeout(function() {
+      var num = parseInt(self.numberBuffer, 10);
+      self.numberBuffer = '';
       disp.classList.remove('visible');
-      if (num >= 1 && num <= this.channels.length) {
-        this.tuneToChannel(num - 1);
-      }
+      if (num >= 1 && num <= self.channels.length) self.tuneToChannel(num - 1);
     }, 1500);
   },
 
-  // ── Keyboard + click controls ─────────────────────────────────────────────
+  // ── Seek bar + time display ───────────────────────────────────────────────
 
-  setupControls() {
+  startSeekPoller: function() {
+    var self = this;
+    setInterval(function() {
+      if (!self.playerReady || !self.player.getDuration) return;
+      var dur = self.player.getDuration() || 0;
+      var cur = self.player.getCurrentTime() || 0;
+      if (!dur) return;
+      var pct = (cur / dur) * 100;
+      el('ctrl-seek-fill').style.width  = pct + '%';
+      el('ctrl-seek-thumb').style.left  = pct + '%';
+      setText('ctrl-current-time', fmtTime(cur));
+      setText('ctrl-duration',     fmtTime(dur));
+    }, 500);
+  },
+
+  initSeekBar: function() {
+    var self = this;
+    var track = el('ctrl-seek-track');
+    var seeking = false;
+
+    function seek(e) {
+      var rect = track.getBoundingClientRect();
+      var pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      var dur  = self.player.getDuration() || 0;
+      if (dur) self.player.seekTo(pct * dur, true);
+    }
+
+    track.addEventListener('mousedown', function(e) { seeking = true; seek(e); e.stopPropagation(); });
+    document.addEventListener('mousemove', function(e) { if (seeking) seek(e); });
+    document.addEventListener('mouseup',   function()  { seeking = false; });
+    track.addEventListener('click', function(e) { seek(e); e.stopPropagation(); });
+  },
+
+  // ── Options: scanlines / vignette / guide layout ─────────────────────────
+
+  staticOn:     true,
+  scanlinesOn:  true,
+  vignetteOn:   true,
+  guideIsGrid:  true,
+  settingsOpen: false,
+
+  toggleStatic: function() {
+    this.staticOn = !this.staticOn;
+    var btn = el('opt-static');
+    btn.textContent = this.staticOn ? 'ON' : 'OFF';
+    btn.classList.toggle('active', this.staticOn);
+  },
+
+  toggleScanlines: function() {
+    this.scanlinesOn = !this.scanlinesOn;
+    el('scanlines').classList.toggle('off', !this.scanlinesOn);
+    var btn = el('opt-scanlines');
+    btn.textContent = this.scanlinesOn ? 'ON' : 'OFF';
+    btn.classList.toggle('active', this.scanlinesOn);
+  },
+
+  toggleVignette: function() {
+    this.vignetteOn = !this.vignetteOn;
+    el('vignette').classList.toggle('off', !this.vignetteOn);
+    var btn = el('opt-vignette');
+    btn.textContent = this.vignetteOn ? 'ON' : 'OFF';
+    btn.classList.toggle('active', this.vignetteOn);
+  },
+
+  toggleGuideLayout: function() {
+    this.guideIsGrid = !this.guideIsGrid;
+    el('guide-grid').classList.toggle('list-layout', !this.guideIsGrid);
+    var btn = el('opt-guide-layout');
+    btn.textContent = this.guideIsGrid ? 'Grid' : 'List';
+  },
+
+  toggleSettings: function() {
+    this.settingsOpen = !this.settingsOpen;
+    el('settings-panel').classList.toggle('open', this.settingsOpen);
+    el('ctrl-settings-btn').classList.toggle('active', this.settingsOpen);
+  },
+
+  closeSettings: function() {
+    if (!this.settingsOpen) return;
+    this.settingsOpen = false;
+    el('settings-panel').classList.remove('open');
+    el('ctrl-settings-btn').classList.remove('active');
+  },
+
+  // ── Captions ─────────────────────────────────────────────────────────────
+
+  captionsOn: false,
+
+  toggleCaptions: function() {
+    if (!this.playerReady) return;
+    this.captionsOn = !this.captionsOn;
+    if (this.captionsOn) {
+      this.player.loadModule('captions');
+      this.player.setOption('captions', 'track', { languageCode: 'en' });
+    } else {
+      this.player.unloadModule('captions');
+    }
+    el('ctrl-cc-btn').classList.toggle('active', this.captionsOn);
+  },
+
+  // ── Shuffle / skip ────────────────────────────────────────────────────────
+
+  // Shuffle: pick a random video on this channel and reset its broadcast
+  shuffleChannel: function() {
+    var ch = this.channels[this.currentIndex];
+    if (!ch) return;
+    var videos = this.videoCache[ch.id];
+    if (!videos || !videos.length) return;
+
+    // Delete broadcast state so initBroadcast picks a fresh random video
+    delete this.broadcasts[ch.id];
+    this.tuneToChannel(this.currentIndex, false, 1);
+  },
+
+  // Skip: advance the broadcast to the next video immediately
+  skipVideo: function() {
+    var ch = this.channels[this.currentIndex];
+    if (!ch) return;
+    var videos = this.videoCache[ch.id];
+    if (!videos || !videos.length) return;
+    var b = this.broadcasts[ch.id];
+    if (!b) { this.tuneToChannel(this.currentIndex, false, 1); return; }
+
+    // Move to start of next video
+    b.videoIndex      = (b.videoIndex + 1) % videos.length;
+    b.videoStartSec   = 0;
+    b.broadcastStartMs = Date.now();
+    this.tuneToChannel(this.currentIndex, false, 1);
+  },
+
+  // ── Fullscreen ────────────────────────────────────────────────────────────
+
+  toggleFullscreen: function() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+    } else {
+      document.exitFullscreen && document.exitFullscreen();
+    }
+  },
+
+  // ── Controls bar auto-hide ────────────────────────────────────────────────
+
+  _ctrlHideTimer: null,
+
+  showControls: function() {
+    el('controls-bar').classList.add('visible');
+    clearTimeout(this._ctrlHideTimer);
+    var self = this;
+    this._ctrlHideTimer = setTimeout(function() {
+      if (!self.settingsOpen) el('controls-bar').classList.remove('visible');
+    }, 4000);
+  },
+
+  // ── Mute ─────────────────────────────────────────────────────────────────
+
+  toggleMute: function() {
+    if (!this.playerReady) return;
+    if (this.muted) {
+      this.player.unMute();
+      this.player.setVolume(parseInt(el('ctrl-volume-slider').value, 10));
+      this.muted = false;
+      el('unmute-prompt').classList.remove('visible');
+      el('icon-vol-on').style.display  = '';
+      el('icon-vol-off').style.display = 'none';
+    } else {
+      this.player.mute();
+      this.muted = true;
+      el('icon-vol-on').style.display  = 'none';
+      el('icon-vol-off').style.display = '';
+    }
+  },
+
+  // ── Controls setup ────────────────────────────────────────────────────────
+
+  setupControls: function() {
+    var self = this;
+
+    // Auto-show controls on mouse move / key press
+    document.addEventListener('mousemove', function() { self.showControls(); });
+    document.addEventListener('keydown',   function() { self.showControls(); });
+
     // Keyboard
-    document.addEventListener('keydown', (e) => {
-      if (e.target.tagName === 'INPUT') return;
+    document.addEventListener('keydown', function(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'RANGE') return;
       switch (e.key) {
-        case 'ArrowRight':
-        case 'ArrowUp':
-          e.preventDefault(); this.nextChannel(); break;
-        case 'ArrowLeft':
-        case 'ArrowDown':
-          e.preventDefault(); this.prevChannel(); break;
-        case 'g': case 'G': case 'Enter':
-          e.preventDefault(); this.toggleGuide(); break;
+        case 'ArrowRight': case 'ArrowUp':
+          e.preventDefault(); self.nextChannel(); break;
+        case 'ArrowLeft': case 'ArrowDown':
+          e.preventDefault(); self.prevChannel(); break;
+        case 'g': case 'G':
+          e.preventDefault(); self.toggleGuide(); break;
         case 'm': case 'M':
-          e.preventDefault(); this.toggleMute(); break;
+          e.preventDefault(); self.toggleMute(); break;
+        case 'f': case 'F':
+          e.preventDefault(); self.toggleFullscreen(); break;
+        case 's': case 'S':
+          e.preventDefault(); self.shuffleChannel(); break;
+        case 'n': case 'N':
+          e.preventDefault(); self.skipVideo(); break;
+        case 'c': case 'C':
+          e.preventDefault(); self.toggleCaptions(); break;
         case 'Escape':
-          this.closeGuide(); break;
-        case 'r': case 'R':
-          this.resetWatched(); break;
+          self.closeGuide(); self.closeSettings(); break;
         default:
-          if (/^[0-9]$/.test(e.key)) this.handleNumberKey(e.key);
+          if (/^[0-9]$/.test(e.key)) self.handleNumberKey(e.key);
       }
     });
 
-    // Click on shield = unmute on first click, subsequent clicks show info
-    el('player-shield').addEventListener('click', () => {
-      if (this.muted) { this.unmuteOnFirstInteraction(); return; }
-      // Toggle info bar visibility
-      el('info-bar').classList.toggle('visible');
-      el('controls-hint').classList.toggle('visible');
+    // Click shield: unmute first, then toggle controls bar
+    el('player-shield').addEventListener('click', function() {
+      if (self.muted) { self.toggleMute(); return; }
+      self.closeSettings();
     });
 
-    el('unmute-prompt').addEventListener('click', () => this.toggleMute());
-    el('btn-next').addEventListener('click', () => this.nextChannel());
-    el('btn-prev').addEventListener('click', () => this.prevChannel());
-    el('guide-close').addEventListener('click', () => this.closeGuide());
+    // Controls bar buttons
+    el('unmute-prompt').addEventListener('click', function() { self.toggleMute(); });
+    el('btn-next').addEventListener('click',      function() { self.nextChannel(); });
+    el('btn-prev').addEventListener('click',      function() { self.prevChannel(); });
+    el('ctrl-ch-next').addEventListener('click',  function() { self.nextChannel(); });
+    el('ctrl-ch-prev').addEventListener('click',  function() { self.prevChannel(); });
+    el('ctrl-mute-btn').addEventListener('click', function() { self.toggleMute(); });
+    el('ctrl-shuffle-btn').addEventListener('click', function() { self.shuffleChannel(); });
+    el('ctrl-skip-btn').addEventListener('click', function() { self.skipVideo(); });
+    el('ctrl-cc-btn').addEventListener('click',   function() { self.toggleCaptions(); });
+    el('ctrl-settings-btn').addEventListener('click', function(e) {
+      e.stopPropagation(); self.toggleSettings();
+    });
+    el('ctrl-fullscreen-btn').addEventListener('click', function() { self.toggleFullscreen(); });
+    el('guide-close').addEventListener('click',         function() { self.closeGuide(); });
 
-    // Swipe support (touch)
-    let touchStartX = 0, touchStartY = 0;
-    document.addEventListener('touchstart', (e) => {
+    // Volume slider
+    el('ctrl-volume-slider').addEventListener('input', function() {
+      if (!self.playerReady) return;
+      var vol = parseInt(this.value, 10);
+      self.player.setVolume(vol);
+      if (vol === 0) {
+        self.player.mute(); self.muted = true;
+        el('icon-vol-on').style.display  = 'none';
+        el('icon-vol-off').style.display = '';
+      } else if (self.muted) {
+        self.player.unMute(); self.muted = false;
+        el('unmute-prompt').classList.remove('visible');
+        el('icon-vol-on').style.display  = '';
+        el('icon-vol-off').style.display = 'none';
+      }
+    });
+
+    // Settings panel options
+    el('opt-static').addEventListener('click',       function() { self.toggleStatic(); });
+    el('opt-scanlines').addEventListener('click',    function() { self.toggleScanlines(); });
+    el('opt-vignette').addEventListener('click',     function() { self.toggleVignette(); });
+    el('opt-guide-layout').addEventListener('click', function() { self.toggleGuideLayout(); });
+    el('opt-reset-watched').addEventListener('click', function() { self.resetWatched(); });
+    el('opt-signout').addEventListener('click', function() {
+      api('/auth/logout', { method: 'POST' }).then(function() { location.reload(); });
+    });
+
+    // Fullscreen icon swap
+    document.addEventListener('fullscreenchange', function() {
+      var isFS = !!document.fullscreenElement;
+      el('icon-fs-enter').style.display = isFS ? 'none' : '';
+      el('icon-fs-exit').style.display  = isFS ? '' : 'none';
+    });
+
+    // Seek bar
+    this.initSeekBar();
+    this.startSeekPoller();
+
+    // Touch swipe
+    var touchStartX = 0, touchStartY = 0;
+    document.addEventListener('touchstart', function(e) {
       touchStartX = e.touches[0].clientX;
       touchStartY = e.touches[0].clientY;
     }, { passive: true });
-    document.addEventListener('touchend', (e) => {
-      const dx = e.changedTouches[0].clientX - touchStartX;
-      const dy = e.changedTouches[0].clientY - touchStartY;
+    document.addEventListener('touchend', function(e) {
+      var dx = e.changedTouches[0].clientX - touchStartX;
+      var dy = e.changedTouches[0].clientY - touchStartY;
       if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
-        dx < 0 ? this.nextChannel() : this.prevChannel();
+        dx < 0 ? self.nextChannel() : self.prevChannel();
       }
     }, { passive: true });
 
-    // Preload adjacent channels in the background
-    setInterval(() => this.preloadAdjacent(), 8000);
+    // Click outside settings panel closes it
+    document.addEventListener('click', function() { self.closeSettings(); });
+    el('settings-panel').addEventListener('click', function(e) { e.stopPropagation(); });
+
+    // Background preload
+    setInterval(function() { self.preloadAdjacent(); }, 8000);
   },
 
-  preloadAdjacent() {
-    const len = this.channels.length;
-    [-2, -1, 1, 2].forEach(offset => {
-      const idx = ((this.currentIndex + offset) % len + len) % len;
-      const id  = this.channels[idx]?.id;
+  preloadAdjacent: function() {
+    var len = this.channels.length;
+    var offsets = [-2, -1, 1, 2];
+    for (var i = 0; i < offsets.length; i++) {
+      var idx = ((this.currentIndex + offsets[i]) % len + len) % len;
+      var id  = this.channels[idx] && this.channels[idx].id;
       if (id && !this.videoCache[id]) this.getChannelVideos(id);
-    });
+    }
   },
 
-  async resetWatched() {
+  resetWatched: async function() {
     await api('/api/watched', { method: 'DELETE' });
     this.watchedVideos.clear();
-    this.showBadge(this.currentIndex); // brief flash confirmation
-    console.log('Watched history cleared.');
+    this.broadcasts = {};   // also reset broadcasts so fresh picks happen
+    var btn = el('opt-reset-watched');
+    btn.textContent = 'Done!';
+    setTimeout(function() { btn.textContent = 'Reset'; }, 2000);
   },
 };
 
-// ── YouTube IFrame API ready callback ───────────────────────────────────────
+// ── YouTube IFrame API ready ─────────────────────────────────────────────────
 
 window._ytAPIReady = false;
-window.onYouTubeIframeAPIReady = () => {
+window.onYouTubeIframeAPIReady = function() {
   window._ytAPIReady = true;
-  if (TV.channels.length) TV.createPlayer(); // already loaded
+  if (TV.channels.length) TV.createPlayer();
 };
 
-// ── Tiny utilities ──────────────────────────────────────────────────────────
+// ── Utilities ────────────────────────────────────────────────────────────────
 
 function el(id)        { return document.getElementById(id); }
 function setText(id,t) { el(id).textContent = t; }
 function show(id)      { el(id).style.display = 'flex'; }
 function hide(id)      { el(id).style.display = 'none'; }
-function escHtml(s)    { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function randomBetween(a, b) { return a + Math.floor(Math.random() * Math.max(1, b - a)); }
+
+function fmtTime(sec) {
+  sec = Math.floor(sec || 0);
+  var h = Math.floor(sec / 3600);
+  var m = Math.floor((sec % 3600) / 60);
+  var s = sec % 60;
+  if (h > 0) return h + ':' + pad(m) + ':' + pad(s);
+  return m + ':' + pad(s);
+}
+function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+function escHtml(s) {
+  if (!s) return '';
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function showError(msg) {
   hide('loading-screen');
@@ -495,17 +807,18 @@ function showError(msg) {
   el('error-screen').style.display = 'flex';
 }
 
-async function api(url, opts = {}) {
-  const res = await fetch(url, {
+async function api(url, opts) {
+  opts = opts || {};
+  var res = await fetch(url, {
     method:  opts.method || 'GET',
     headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
     body:    opts.body ? JSON.stringify(opts.body) : undefined,
   });
   if (res.status === 401) { location.href = '/'; throw new Error('Unauthenticated'); }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.json();
 }
 
-// ── Bootstrap ───────────────────────────────────────────────────────────────
+// ── Bootstrap ────────────────────────────────────────────────────────────────
 
 TV.init();

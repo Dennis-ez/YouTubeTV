@@ -61,18 +61,62 @@ function getYouTube(tokens) {
   return { youtube: google.youtube({ version: 'v3', auth }), auth };
 }
 
+// ── SQLite session store (survives restarts, works in Safari) ──────────────
+
+const Store = session.Store;
+class SQLiteStore extends Store {
+  constructor() {
+    super();
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        sid      TEXT    PRIMARY KEY,
+        data     TEXT    NOT NULL,
+        expires  INTEGER NOT NULL
+      );
+    `);
+    // Prune expired sessions every 15 min
+    setInterval(() => {
+      db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());
+    }, 15 * 60 * 1000).unref();
+  }
+  get(sid, cb) {
+    try {
+      const row = db.prepare('SELECT data, expires FROM sessions WHERE sid = ?').get(sid);
+      if (!row || row.expires < Date.now()) return cb(null, null);
+      cb(null, JSON.parse(row.data));
+    } catch (e) { cb(e); }
+  }
+  set(sid, sess, cb) {
+    try {
+      const exp = sess.cookie?.expires
+        ? new Date(sess.cookie.expires).getTime()
+        : Date.now() + 7 * 24 * 60 * 60 * 1000;
+      db.prepare('INSERT OR REPLACE INTO sessions (sid, data, expires) VALUES (?, ?, ?)')
+        .run(sid, JSON.stringify(sess), exp);
+      cb(null);
+    } catch (e) { cb(e); }
+  }
+  destroy(sid, cb) {
+    try { db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid); cb(null); }
+    catch (e) { cb(e); }
+  }
+  touch(sid, sess, cb) { this.set(sid, sess, cb); }
+}
+
 // ── Middleware ─────────────────────────────────────────────────────────────
 
 app.use(express.json());
 app.use(session({
+  store:             new SQLiteStore(),
   secret:            process.env.SESSION_SECRET || 'ytv-dev-secret-change-me',
   resave:            false,
-  saveUninitialized: false,
-  cookie:            { maxAge: 7 * 24 * 60 * 60 * 1000 },
+  saveUninitialized: true,   // set cookie on first visit so Safari sees it as first-party
+  cookie:            { maxAge: 7 * 24 * 60 * 60 * 1000, sameSite: 'lax', httpOnly: true },
 }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 function requireAuth(req, res, next) {
+  console.log(`[auth] ${req.method} ${req.path} | sid=${req.sessionID?.slice(0,8)} | tokens=${!!req.session.tokens} | userId=${req.session.userId || 'none'}`);
   if (!req.session.tokens) return res.status(401).json({ error: 'Not authenticated' });
   next();
 }
@@ -108,7 +152,12 @@ app.get('/auth/callback', async (req, res) => {
     req.session.userId  = data.id;
     req.session.email   = data.email;
     req.session.picture = data.picture;
-    res.redirect('/');
+    console.log(`[callback] saving session sid=${req.sessionID?.slice(0,8)} userId=${data.id}`);
+    req.session.save((err) => {
+      if (err) console.error('Session save error:', err);
+      console.log(`[callback] session saved, redirecting`);
+      res.redirect('/');
+    });
   } catch (err) {
     console.error('OAuth callback error:', err.message);
     res.redirect('/?error=auth_failed');
@@ -162,8 +211,8 @@ app.get('/api/subscriptions', requireAuth, async (req, res) => {
     cacheSet(key, result, 60 * 60 * 1000);
     res.json(result);
   } catch (err) {
-    console.error('Subscriptions error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch subscriptions' });
+    console.error('Subscriptions error:', err.message, err.errors || '');
+    res.status(500).json({ error: 'Failed to fetch subscriptions', detail: err.message });
   }
 });
 
