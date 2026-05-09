@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube TV</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- TV scanlines + vignette overlay -->
+  <div id="scanlines"></div>
+  <div id="vignette"></div>
+
+  <!-- Static noise canvas (channel switch effect) -->
+  <canvas id="static-canvas"></canvas>
+
+  <!-- ── Login screen ─────────────────────────── -->
+  <div id="login-screen">
+    <div class="login-box">
+      <div class="tv-icon">📺</div>
+      <h1>YouTube TV</h1>
+      <p>Sign in with your Google account to browse your subscriptions like TV channels.</p>
+      <a href="/auth/login" class="btn-signin">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+        Sign in with Google
+      </a>
+      <p class="hint">Your subscriptions become TV channels.<br>Videos start at a random timestamp — just like real TV.</p>
+    </div>
+  </div>
+
+  <!-- ── Loading screen ────────────────────────── -->
+  <div id="loading-screen">
+    <div class="loading-box">
+      <div class="spinner"></div>
+      <p id="loading-msg">Loading…</p>
+    </div>
+  </div>
+
+  <!-- ── Error screen ───────────────────────────── -->
+  <div id="error-screen">
+    <div class="error-box">
+      <div class="error-icon">⚠️</div>
+      <p id="error-msg">Something went wrong.</p>
+      <button onclick="location.reload()" class="btn-retry">Retry</button>
+    </div>
+  </div>
+
+  <!-- ── Main TV ─────────────────────────────────── -->
+  <div id="tv" style="display:none">
+
+    <!-- YouTube player fills the screen -->
+    <div id="player-wrapper">
+      <div id="youtube-player"></div>
+      <!-- click shield so clicks on the video don't pause it; swallowed by our handler -->
+      <div id="player-shield"></div>
+    </div>
+
+    <!-- Unmute prompt -->
+    <div id="unmute-prompt">🔇 Click anywhere to unmute</div>
+
+    <!-- Channel indicator (top-right, fades out) -->
+    <div id="channel-badge">
+      <span id="badge-number">CH 1</span>
+      <span id="badge-name">Channel Name</span>
+    </div>
+
+    <!-- Video info bar (bottom, fades out) -->
+    <div id="info-bar">
+      <img id="info-thumb" src="" alt="">
+      <div id="info-text">
+        <div id="info-channel"></div>
+        <div id="info-title"></div>
+      </div>
+    </div>
+
+    <!-- Controls hint (bottom-right, fades out with info bar) -->
+    <div id="controls-hint">
+      ← → channels &nbsp;|&nbsp; G guide &nbsp;|&nbsp; M mute &nbsp;|&nbsp; R reset watched
+    </div>
+
+    <!-- Channel Up / Down buttons -->
+    <button id="btn-prev" title="Previous channel (←)">&#9650;</button>
+    <button id="btn-next" title="Next channel (→)">&#9660;</button>
+
+    <!-- ── Channel Guide overlay ─────────────────── -->
+    <div id="guide-overlay">
+      <div id="guide-header">
+        <span>📺 Channel Guide</span>
+        <button id="guide-close" title="Close (Esc)">✕</button>
+      </div>
+      <div id="guide-grid"></div>
+    </div>
+
+    <!-- Channel number input display (e.g. typing "42") -->
+    <div id="number-input-display"></div>
+
+  </div>
+
+  <!-- YouTube IFrame API -->
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="app.js"></script>
+</body>
+</html>
