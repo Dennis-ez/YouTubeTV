@@ -66,6 +66,8 @@ html, body { width: 100%; height: 100%; background: #000; color: #fff;
 .btn-retry:hover { background: rgba(255,255,255,0.2); }
 
 /* ── TV main ──────────────────────────────────────────────────────────────── */
+body.cursor-hidden,
+body.cursor-hidden * { cursor: none !important; }
 #tv { position: fixed; inset: 0; z-index: 1; }
 
 #player-wrapper { position: absolute; inset: 0; }
@@ -93,6 +95,9 @@ html, body { width: 100%; height: 100%; background: #000; color: #fff;
   color: rgba(255,255,255,0.5); text-transform: uppercase; }
 #badge-name   { font-size: 1.3rem; font-weight: 700; text-align: right;
   text-shadow: 0 2px 8px rgba(0,0,0,0.8); max-width: 320px; line-height: 1.2; }
+#badge-title  { font-size: 0.72rem; color: rgba(255,255,255,0.5); text-align: right;
+  max-width: 320px; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* ── Number input display ─────────────────────────────────────────────────── */
 #number-input-display {
@@ -116,6 +121,7 @@ html, body { width: 100%; height: 100%; background: #000; color: #fff;
 #btn-next { top: 50%; transform: translateY(calc(-50% + 28px)); }
 #btn-prev:hover, #btn-next:hover { background: rgba(255,255,255,0.2); }
 #tv:hover #btn-prev, #tv:hover #btn-next { opacity: 1; }
+body.cursor-hidden #btn-prev, body.cursor-hidden #btn-next { opacity: 0 !important; }
 
 /* ── Controls bar ─────────────────────────────────────────────────────────── */
 #controls-bar {
@@ -233,6 +239,39 @@ html, body { width: 100%; height: 100%; background: #000; color: #fff;
 .action-btn.danger { border-color: rgba(255,80,80,0.4); color: rgba(255,100,100,0.8); }
 .action-btn.danger:hover { background: rgba(255,50,50,0.2); color: #ff6666; }
 
+/* ── Shortcuts overlay ────────────────────────────────────────────────────── */
+#shortcuts-overlay {
+  position: absolute; inset: 0; z-index: 140;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.72); backdrop-filter: blur(6px);
+  opacity: 0; pointer-events: none; transition: opacity 0.2s;
+}
+#shortcuts-overlay.open { opacity: 1; pointer-events: auto; }
+#shortcuts-box {
+  background: rgba(15,15,15,0.97); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px; padding: 24px 28px; min-width: 300px;
+}
+.shortcuts-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 18px; font-size: 0.7rem; font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.4);
+}
+#shortcuts-close {
+  background: none; border: none; color: rgba(255,255,255,0.4);
+  font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  transition: color 0.15s;
+}
+#shortcuts-close:hover { color: #fff; }
+.shortcuts-grid {
+  display: grid; grid-template-columns: auto 1fr; gap: 9px 18px; align-items: center;
+}
+.shortcuts-grid kbd {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 5px; padding: 3px 8px; font-size: 0.75rem; font-family: inherit;
+  color: rgba(255,255,255,0.8); white-space: nowrap; text-align: center;
+}
+.shortcuts-grid span { font-size: 0.82rem; color: rgba(255,255,255,0.5); }
+
 /* ── Channel Guide ────────────────────────────────────────────────────────── */
 #guide-overlay {
   position: absolute; inset: 0; z-index: 150;
@@ -298,3 +337,9 @@ html, body { width: 100%; height: 100%; background: #000; color: #fff;
 .guide-now-playing.live   { color: #FF0000; }
 .guide-now-playing.on-air { color: rgba(255,255,255,0.65); }
 #guide-grid.list-layout .guide-now-playing { flex: 1; -webkit-line-clamp: 1; }
+
+.guide-progress { height: 2px; background: rgba(255,255,255,0.08); border-radius: 1px;
+  overflow: hidden; margin-top: 6px; }
+.guide-progress-fill { height: 100%; width: 0%; background: #FF0000; border-radius: 1px;
+  transition: width 0.6s linear; }
+#guide-grid.list-layout .guide-progress { display: none; }

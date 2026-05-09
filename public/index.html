@@ -60,6 +60,7 @@
     <div id="channel-badge">
       <span id="badge-number">CH 1</span>
       <span id="badge-name">Channel Name</span>
+      <span id="badge-title"></span>
     </div>
 
     <!-- Channel number typed by user -->
@@ -129,6 +130,11 @@
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96a7.02 7.02 0 0 0-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87a.49.49 0 0 0 .12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.37 1.04.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.57 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
           </button>
 
+          <!-- Picture in picture -->
+          <button class="ctrl-btn" id="ctrl-pip-btn" title="Picture in picture (P)">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zm-10-7h9v6h-9z"/></svg>
+          </button>
+
           <!-- Fullscreen -->
           <button class="ctrl-btn" id="ctrl-fullscreen-btn" title="Fullscreen (F)">
             <svg id="icon-fs-enter" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
@@ -159,12 +165,39 @@
         <button class="toggle-btn" id="opt-guide-layout">Grid</button>
       </div>
       <div class="setting-row">
+        <span>Sleep timer</span>
+        <button class="toggle-btn" id="opt-sleep-timer">Off</button>
+      </div>
+      <div class="setting-row">
         <span>Reset watched history</span>
         <button class="action-btn" id="opt-reset-watched">Reset</button>
       </div>
       <div class="setting-row">
         <span>Sign out</span>
         <button class="action-btn danger" id="opt-signout">Sign out</button>
+      </div>
+    </div>
+
+    <!-- ── Keyboard shortcuts overlay ───────────────────── -->
+    <div id="shortcuts-overlay">
+      <div id="shortcuts-box">
+        <div class="shortcuts-header">
+          <span>Keyboard Shortcuts</span>
+          <button id="shortcuts-close">✕</button>
+        </div>
+        <div class="shortcuts-grid">
+          <kbd>← →</kbd><span>Change channel</span>
+          <kbd>0–9</kbd><span>Jump to channel number</span>
+          <kbd>G</kbd><span>Channel guide</span>
+          <kbd>M</kbd><span>Mute / unmute</span>
+          <kbd>F</kbd><span>Fullscreen</span>
+          <kbd>P</kbd><span>Picture in picture</span>
+          <kbd>S</kbd><span>Shuffle this channel</span>
+          <kbd>N</kbd><span>Next video</span>
+          <kbd>C</kbd><span>Captions</span>
+          <kbd>?</kbd><span>This overlay</span>
+          <kbd>Esc</kbd><span>Close overlays</span>
+        </div>
       </div>
     </div>
 
