@@ -819,6 +819,11 @@ async function api(url, opts) {
   if (!res.ok) {
     var body = {};
     try { body = await res.json(); } catch (e) {}
+    // YouTube scope not granted — send user back through OAuth to re-authorize
+    if (res.status === 403 && body.error === 'reauth_required') {
+      location.href = '/auth/login';
+      throw new Error('reauth');
+    }
     var err = new Error(body.detail || body.error || ('HTTP ' + res.status));
     err.detail = body.detail || body.error;
     throw err;

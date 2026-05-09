@@ -212,6 +212,12 @@ app.get('/api/subscriptions', requireAuth, async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Subscriptions error:', err.message, err.errors || '');
+    // Insufficient scope — user needs to re-authorize with youtube.readonly
+    const reason = err.errors?.[0]?.reason;
+    if (reason === 'insufficientPermissions' || err.message?.includes('Insufficient Permission')) {
+      req.session.destroy(() => {});
+      return res.status(403).json({ error: 'reauth_required', detail: 'YouTube permission not granted. Please sign in again.' });
+    }
     res.status(500).json({ error: 'Failed to fetch subscriptions', detail: err.message });
   }
 });
