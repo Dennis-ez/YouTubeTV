@@ -52,7 +52,8 @@ var TV = {
 
     } catch (err) {
       console.error(err);
-      showError('Failed to load channels. Please refresh and try again.');
+      var msg = err.detail || err.message || 'Unknown error';
+      showError('Failed to load channels: ' + msg + '\n\nRefresh to try again.');
     }
   },
 
@@ -815,7 +816,13 @@ async function api(url, opts) {
     body:    opts.body ? JSON.stringify(opts.body) : undefined,
   });
   if (res.status === 401) { location.href = '/'; throw new Error('Unauthenticated'); }
-  if (!res.ok) throw new Error('HTTP ' + res.status);
+  if (!res.ok) {
+    var body = {};
+    try { body = await res.json(); } catch (e) {}
+    var err = new Error(body.detail || body.error || ('HTTP ' + res.status));
+    err.detail = body.detail || body.error;
+    throw err;
+  }
   return res.json();
 }
 
