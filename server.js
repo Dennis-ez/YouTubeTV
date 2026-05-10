@@ -114,6 +114,7 @@ app.use(session({
   cookie:            { maxAge: 7 * 24 * 60 * 60 * 1000, sameSite: 'lax', httpOnly: true },
 }));
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/favicon.ico', (req, res) => res.sendFile(path.join(__dirname, 'public', 'favicon.ico')));
 
 function requireAuth(req, res, next) {
   console.log(`[auth] ${req.method} ${req.path} | sid=${req.sessionID?.slice(0,8)} | tokens=${!!req.session.tokens} | userId=${req.session.userId || 'none'}`);
