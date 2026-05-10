@@ -622,10 +622,24 @@ var TV = {
   // ── Fullscreen ────────────────────────────────────────────────────────────
 
   toggleFullscreen: function() {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+    var doc = document;
+    var isFS = !!(doc.fullscreenElement || doc.webkitFullscreenElement);
+    if (!isFS) {
+      var elem = doc.documentElement;
+      if (elem.requestFullscreen) {
+        elem.requestFullscreen();
+      } else if (elem.webkitRequestFullscreen) {
+        elem.webkitRequestFullscreen();
+      } else {
+        var iframe = el('youtube-player').querySelector('iframe');
+        if (iframe) {
+          if (iframe.requestFullscreen) iframe.requestFullscreen();
+          else if (iframe.webkitRequestFullscreen) iframe.webkitRequestFullscreen();
+        }
+      }
     } else {
-      document.exitFullscreen && document.exitFullscreen();
+      if (doc.exitFullscreen) doc.exitFullscreen();
+      else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
     }
   },
 
@@ -775,11 +789,13 @@ var TV = {
     });
 
     // Fullscreen icon swap
-    document.addEventListener('fullscreenchange', function() {
-      var isFS = !!document.fullscreenElement;
+    function onFSChange() {
+      var isFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
       el('icon-fs-enter').style.display = isFS ? 'none' : '';
       el('icon-fs-exit').style.display  = isFS ? '' : 'none';
-    });
+    }
+    document.addEventListener('fullscreenchange', onFSChange);
+    document.addEventListener('webkitfullscreenchange', onFSChange);
 
     // Seek bar
     this.initSeekBar();
