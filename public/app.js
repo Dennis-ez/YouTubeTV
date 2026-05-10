@@ -25,6 +25,12 @@ var TV = {
   _sleepTimer:       null,
   _sleepOptions:     [0, 30, 60, 90],
   _sleepIndex:       0,
+  _speedOptions:     [1, 1.25, 1.5, 0.75],
+  _speedIndex:       0,
+  _channelHistory:   [],
+  _historyNav:       false,
+  _backToLiveTimer:  null,
+  _volFeedbackTimer: null,
   shortcutsOpen:     false,
   numberBuffer:  '',
   _tuneSeq:      0,
@@ -98,10 +104,11 @@ var TV = {
     this.syncSettingsUI();
     this.initPip();
 
-    // Restore saved volume
+    // Restore saved volume and speed
     var savedVol = parseInt(lsGet('ytv_volume', '80'), 10);
     el('ctrl-volume-slider').value = savedVol;
     this.player.setVolume(savedVol);
+    if (this._speedIndex > 0) this.player.setPlaybackRate(this._speedOptions[this._speedIndex]);
 
     // Restore last channel or start on a random one
     var savedCh = parseInt(lsGet('ytv_lastCh', '-1'), 10);
@@ -172,6 +179,8 @@ var TV = {
 
   // dir: +1 = forward, -1 = backward (controls which way we skip empty channels)
   tuneToChannel: async function(index, skipStatic, dir) {
+    var isHistoryNav = this._historyNav;   // capture before any await
+    this._historyNav = false;
     var n = this.channels.length;
     dir   = (dir !== undefined) ? dir : 1;
     index = ((index % n) + n) % n;
@@ -197,7 +206,11 @@ var TV = {
 
     if (!videos.length) { showError('No playable videos found in any channel.'); return; }
 
-    // Commit
+    // Commit — push old channel to history before overwriting currentIndex
+    if (!isHistoryNav && this.currentIndex >= 0 && this.currentIndex !== i) {
+      this._channelHistory.push(this.currentIndex);
+      if (this._channelHistory.length > 20) this._channelHistory.shift();
+    }
     this.currentIndex = i;
     lsSet('ytv_lastCh', i);
 
@@ -207,6 +220,9 @@ var TV = {
     // calculate the current position from elapsed wall-clock time.
     this.initBroadcast(channelId, videos);
     var now = this.getBroadcastNow(channelId, videos);
+
+    // Persist broadcast state so position survives page reload
+    try { localStorage.setItem('ytv_broadcasts', JSON.stringify(this.broadcasts)); } catch(e) {}
 
     this.showBadge(i, now.video);
 
@@ -224,15 +240,17 @@ var TV = {
     this.showInfoBar(this.channels[i], now.video);
     this.updateGuideActive();
 
-    // Re-apply captions state after video load
+    // Re-apply captions + speed after video load (player can reset them)
     var self = this;
     setTimeout(function() {
-      if (self.captionsOn && self.playerReady) {
+      if (!self.playerReady) return;
+      if (self.captionsOn) {
         self.player.loadModule('captions');
         self.player.setOption('captions', 'track', { languageCode: 'en' });
-      } else if (self.playerReady) {
+      } else {
         self.player.unloadModule('captions');
       }
+      if (self._speedIndex > 0) self.player.setPlaybackRate(self._speedOptions[self._speedIndex]);
     }, 1500);
   },
 
@@ -382,6 +400,9 @@ var TV = {
     this.guideOpen = false;
     el('guide-overlay').classList.remove('open');
     clearInterval(this._guideRefreshTimer);
+    el('guide-search').value = '';
+    var cards = el('guide-grid').querySelectorAll('.guide-card');
+    for (var i = 0; i < cards.length; i++) cards[i].style.display = '';
   },
 
   toggleGuide: function() { this.guideOpen ? this.closeGuide() : this.openGuide(); },
@@ -480,10 +501,10 @@ var TV = {
       if (dur) self.player.seekTo(pct * dur, true);
     }
 
-    track.addEventListener('mousedown', function(e) { seeking = true; seek(e); e.stopPropagation(); });
+    track.addEventListener('mousedown', function(e) { seeking = true; seek(e); e.stopPropagation(); TV.showBackToLive(); });
     document.addEventListener('mousemove', function(e) { if (seeking) seek(e); });
     document.addEventListener('mouseup',   function()  { seeking = false; });
-    track.addEventListener('click', function(e) { seek(e); e.stopPropagation(); });
+    track.addEventListener('click', function(e) { seek(e); e.stopPropagation(); TV.showBackToLive(); });
   },
 
   // ── Options: scanlines / vignette / guide layout ─────────────────────────
@@ -638,9 +659,14 @@ var TV = {
   setupControls: function() {
     var self = this;
 
-    // Auto-show controls on mouse move / key press
-    document.addEventListener('mousemove', function() { self.showControls(); });
-    document.addEventListener('keydown',   function() { self.showControls(); });
+    // Auto-show controls on mouse move / key press; track cursor ring position
+    document.addEventListener('mousemove', function(e) {
+      self.showControls();
+      var ring = el('cursor-ring');
+      ring.style.left = e.clientX + 'px';
+      ring.style.top  = e.clientY + 'px';
+    });
+    document.addEventListener('keydown', function() { self.showControls(); });
 
     // Keyboard
     document.addEventListener('keydown', function(e) {
@@ -658,6 +684,12 @@ var TV = {
           e.preventDefault(); self.toggleFullscreen(); break;
         case 'p': case 'P':
           e.preventDefault(); self.togglePip(); break;
+        case '[':
+          e.preventDefault(); self.adjustVolume(-10); break;
+        case ']':
+          e.preventDefault(); self.adjustVolume(10); break;
+        case 'Backspace':
+          e.preventDefault(); self.goBack(); break;
         case 's': case 'S':
           e.preventDefault(); self.shuffleChannel(); break;
         case 'n': case 'N':
@@ -725,6 +757,7 @@ var TV = {
     el('opt-vignette').addEventListener('click',     function() { self.toggleVignette(); });
     el('opt-guide-layout').addEventListener('click', function() { self.toggleGuideLayout(); });
     el('opt-sleep-timer').addEventListener('click',    function() { self.toggleSleepTimer(); });
+    el('opt-speed').addEventListener('click',          function() { self.cycleSpeed(); });
     el('opt-reset-watched').addEventListener('click', function() { self.resetWatched(); });
     el('opt-signout').addEventListener('click', function() {
       api('/auth/logout', { method: 'POST' }).then(function() { location.reload(); });
@@ -755,6 +788,29 @@ var TV = {
       }
     }, { passive: true });
 
+    // Video title opens YouTube
+    el('ctrl-title-label').addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (self.currentVideo) window.open('https://www.youtube.com/watch?v=' + self.currentVideo.id, '_blank');
+    });
+
+    // Back to live
+    el('back-to-live').addEventListener('click', function() { self.backToLive(); });
+
+    // Guide search
+    el('guide-search').addEventListener('input', function() {
+      var q = this.value.toLowerCase().trim();
+      var cards = el('guide-grid').querySelectorAll('.guide-card');
+      for (var i = 0; i < cards.length; i++) {
+        var name = TV.channels[i] ? TV.channels[i].title.toLowerCase() : '';
+        cards[i].style.display = (!q || name.indexOf(q) !== -1) ? '' : 'none';
+      }
+    });
+    el('guide-search').addEventListener('keydown', function(e) {
+      e.stopPropagation();
+      if (e.key === 'Escape') TV.closeGuide();
+    });
+
     // Click outside settings panel closes it
     document.addEventListener('click', function() { self.closeSettings(); });
     el('settings-panel').addEventListener('click', function(e) { e.stopPropagation(); });
@@ -776,7 +832,8 @@ var TV = {
   resetWatched: async function() {
     await api('/api/watched', { method: 'DELETE' });
     this.watchedVideos.clear();
-    this.broadcasts = {};   // also reset broadcasts so fresh picks happen
+    this.broadcasts = {};
+    try { localStorage.removeItem('ytv_broadcasts'); } catch(e) {}
     var btn = el('opt-reset-watched');
     btn.textContent = 'Done!';
     setTimeout(function() { btn.textContent = 'Reset'; }, 2000);
@@ -789,8 +846,13 @@ var TV = {
     this.scanlinesOn = lsGet('ytv_scanlines',    'true') === 'true';
     this.vignetteOn  = lsGet('ytv_vignette',     'true') === 'true';
     this.guideIsGrid = lsGet('ytv_guide_layout', 'grid') === 'grid';
+    this._speedIndex = parseInt(lsGet('ytv_speed_idx', '0'), 10) % this._speedOptions.length;
     el('scanlines').classList.toggle('off', !this.scanlinesOn);
     el('vignette').classList.toggle('off', !this.vignetteOn);
+    try {
+      var b = localStorage.getItem('ytv_broadcasts');
+      if (b) this.broadcasts = JSON.parse(b);
+    } catch(e) {}
   },
 
   syncSettingsUI: function() {
@@ -801,6 +863,9 @@ var TV = {
     el('opt-static').classList.toggle('active',    this.staticOn);
     el('opt-scanlines').classList.toggle('active', this.scanlinesOn);
     el('opt-vignette').classList.toggle('active',  this.vignetteOn);
+    var rate = this._speedOptions[this._speedIndex];
+    el('opt-speed').textContent = rate + '×';
+    el('opt-speed').classList.toggle('active', rate !== 1);
   },
 
   // ── Sleep timer ──────────────────────────────────────────────────────────
@@ -849,7 +914,7 @@ var TV = {
       pipWin.document.body.appendChild(wrapper);
       btn.classList.add('active');
       pipWin.addEventListener('pagehide', function() {
-        if (!el('tv').contains(wrapper)) el('tv').insertBefore(wrapper, el('tv').firstChild);
+        if (!el('tv').contains(wrapper)) el('tv').appendChild(wrapper);
         btn.classList.remove('active');
       });
     } catch(e) { console.warn('PiP:', e); }
@@ -866,6 +931,81 @@ var TV = {
     if (!this.shortcutsOpen) return;
     this.shortcutsOpen = false;
     el('shortcuts-overlay').classList.remove('open');
+  },
+
+  // ── Channel history (Backspace) ──────────────────────────────────────────
+
+  goBack: function() {
+    if (!this._channelHistory.length) return;
+    this._historyNav = true;
+    this.tuneToChannel(this._channelHistory.pop(), false, 1);
+  },
+
+  // ── Back to live ─────────────────────────────────────────────────────────
+
+  showBackToLive: function() {
+    el('back-to-live').classList.add('visible');
+    clearTimeout(this._backToLiveTimer);
+    var self = this;
+    this._backToLiveTimer = setTimeout(function() {
+      el('back-to-live').classList.remove('visible');
+    }, 8000);
+  },
+
+  backToLive: function() {
+    var ch = this.channels[this.currentIndex];
+    if (!ch || !this.broadcasts[ch.id]) return;
+    var videos = this.videoCache[ch.id];
+    if (!videos || !videos.length) return;
+    var now = this.getBroadcastNow(ch.id, videos);
+    if (this.playerReady) this.player.seekTo(now.position, true);
+    el('back-to-live').classList.remove('visible');
+    clearTimeout(this._backToLiveTimer);
+  },
+
+  // ── Playback speed ───────────────────────────────────────────────────────
+
+  cycleSpeed: function() {
+    this._speedIndex = (this._speedIndex + 1) % this._speedOptions.length;
+    var rate = this._speedOptions[this._speedIndex];
+    if (this.playerReady) this.player.setPlaybackRate(rate);
+    lsSet('ytv_speed_idx', this._speedIndex);
+    var btn = el('opt-speed');
+    btn.textContent = rate + '×';
+    btn.classList.toggle('active', rate !== 1);
+  },
+
+  // ── Volume keyboard control ───────────────────────────────────────────────
+
+  adjustVolume: function(delta) {
+    var slider = el('ctrl-volume-slider');
+    var newVol = Math.max(0, Math.min(100, parseInt(slider.value, 10) + delta));
+    slider.value = newVol;
+    lsSet('ytv_volume', newVol);
+    if (!this.playerReady) return;
+    this.player.setVolume(newVol);
+    if (newVol === 0) {
+      this.player.mute(); this.muted = true;
+      el('icon-vol-on').style.display  = 'none';
+      el('icon-vol-off').style.display = '';
+    } else if (this.muted) {
+      this.player.unMute(); this.muted = false;
+      el('unmute-prompt').classList.remove('visible');
+      el('icon-vol-on').style.display  = '';
+      el('icon-vol-off').style.display = 'none';
+    }
+    this.showVolumeFeedback(newVol);
+  },
+
+  showVolumeFeedback: function(vol) {
+    var indicator = el('volume-feedback');
+    indicator.textContent = vol === 0 ? '🔇 Muted' : '🔊 ' + vol + '%';
+    indicator.classList.add('visible');
+    clearTimeout(this._volFeedbackTimer);
+    var self = this;
+    this._volFeedbackTimer = setTimeout(function() {
+      el('volume-feedback').classList.remove('visible');
+    }, 1400);
   },
 };
 
@@ -920,14 +1060,14 @@ async function api(url, opts) {
     headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
     body:    opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  if (res.status === 401) { location.href = '/'; throw new Error('Unauthenticated'); }
+  if (res.status === 401) { location.href = '/'; return new Promise(function() {}); }
   if (!res.ok) {
     var body = {};
     try { body = await res.json(); } catch (e) {}
     // YouTube scope not granted — send user back through OAuth to re-authorize
     if (res.status === 403 && body.error === 'reauth_required') {
       location.href = '/auth/login';
-      throw new Error('reauth');
+      return new Promise(function() {}); // navigation in progress; don't surface an error
     }
     var err = new Error(body.detail || body.error || ('HTTP ' + res.status));
     err.detail = body.detail || body.error;
