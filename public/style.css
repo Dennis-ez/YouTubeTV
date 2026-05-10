@@ -75,6 +75,35 @@ body.cursor-hidden * { cursor: none !important; }
   position: absolute; inset: 0; width: 100% !important; height: 100% !important; border: none; }
 #player-shield { position: absolute; inset: 0; z-index: 10; cursor: pointer; }
 
+/* ── Volume feedback ──────────────────────────────────────────────────────── */
+#volume-feedback {
+  position: absolute; top: 42%; left: 50%; transform: translateX(-50%);
+  z-index: 55; background: rgba(0,0,0,0.78); color: #fff;
+  padding: 10px 22px; border-radius: 10px; font-size: 1.1rem; font-weight: 600;
+  opacity: 0; pointer-events: none; transition: opacity 0.2s; white-space: nowrap;
+}
+#volume-feedback.visible { opacity: 1; }
+
+/* ── Back to live ─────────────────────────────────────────────────────────── */
+#back-to-live {
+  position: absolute; bottom: 90px; right: 20px; z-index: 65;
+  background: rgba(180,0,0,0.88); color: #fff; padding: 8px 16px;
+  border-radius: 999px; font-size: 0.82rem; font-weight: 600; letter-spacing: 0.02em;
+  cursor: pointer; opacity: 0; pointer-events: none;
+  transition: opacity 0.2s, background 0.15s; white-space: nowrap;
+}
+#back-to-live:hover { background: rgba(220,0,0,0.95); }
+#back-to-live.visible { opacity: 1; pointer-events: auto; }
+
+/* ── Cursor ring ──────────────────────────────────────────────────────────── */
+#cursor-ring {
+  position: fixed; width: 32px; height: 32px; z-index: 9999;
+  border: 1.5px solid rgba(255,255,255,0.22); border-radius: 50%;
+  pointer-events: none; transform: translate(-50%, -50%);
+  opacity: 0; transition: opacity 0.35s;
+}
+body.cursor-hidden #cursor-ring { opacity: 1; }
+
 /* ── Unmute prompt ────────────────────────────────────────────────────────── */
 #unmute-prompt {
   position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
@@ -184,7 +213,10 @@ body.cursor-hidden #btn-prev, body.cursor-hidden #btn-next { opacity: 0 !importa
 #ctrl-ch-label    { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em;
   color: rgba(255,255,255,0.45); text-transform: uppercase; }
 #ctrl-title-label { font-size: 0.82rem; font-weight: 500; color: rgba(255,255,255,0.9);
-  max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer; transition: color 0.15s; }
+#ctrl-title-label:hover { color: #fff; text-decoration: underline;
+  text-decoration-color: rgba(255,255,255,0.4); }
 
 /* Volume slider */
 .ctrl-slider {
@@ -283,9 +315,18 @@ body.cursor-hidden #btn-prev, body.cursor-hidden #btn-next { opacity: 0 !importa
 
 #guide-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 20px 28px; border-bottom: 1px solid rgba(255,255,255,0.1);
+  padding: 14px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);
   font-size: 1rem; font-weight: 600; letter-spacing: 0.03em; flex-shrink: 0;
 }
+#guide-header-right { display: flex; align-items: center; gap: 10px; }
+#guide-search {
+  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px; color: #fff; padding: 6px 12px; font-size: 0.85rem;
+  outline: none; width: 170px; transition: border-color 0.15s, background 0.15s;
+  font-family: inherit;
+}
+#guide-search::placeholder { color: rgba(255,255,255,0.28); }
+#guide-search:focus { border-color: rgba(255,255,255,0.35); background: rgba(255,255,255,0.1); }
 #guide-close {
   background: none; border: none; color: rgba(255,255,255,0.5);
   font-size: 1.2rem; cursor: pointer; padding: 4px 8px; border-radius: 4px;

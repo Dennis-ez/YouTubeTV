@@ -56,6 +56,12 @@
     <!-- Unmute prompt -->
     <div id="unmute-prompt">🔇 Click to unmute</div>
 
+    <!-- Volume feedback -->
+    <div id="volume-feedback"></div>
+
+    <!-- Back to live -->
+    <div id="back-to-live">⦿ Back to live</div>
+
     <!-- Channel badge (top-right, fades out) -->
     <div id="channel-badge">
       <span id="badge-number">CH 1</span>
@@ -165,6 +171,10 @@
         <button class="toggle-btn" id="opt-guide-layout">Grid</button>
       </div>
       <div class="setting-row">
+        <span>Playback speed</span>
+        <button class="toggle-btn" id="opt-speed">1×</button>
+      </div>
+      <div class="setting-row">
         <span>Sleep timer</span>
         <button class="toggle-btn" id="opt-sleep-timer">Off</button>
       </div>
@@ -187,7 +197,9 @@
         </div>
         <div class="shortcuts-grid">
           <kbd>← →</kbd><span>Change channel</span>
+          <kbd>⌫</kbd><span>Previous channel</span>
           <kbd>0–9</kbd><span>Jump to channel number</span>
+          <kbd>[ ]</kbd><span>Volume down / up</span>
           <kbd>G</kbd><span>Channel guide</span>
           <kbd>M</kbd><span>Mute / unmute</span>
           <kbd>F</kbd><span>Fullscreen</span>
@@ -205,7 +217,10 @@
     <div id="guide-overlay">
       <div id="guide-header">
         <span>📺 Channel Guide</span>
-        <button id="guide-close" title="Close (Esc / G)">✕</button>
+        <div id="guide-header-right">
+          <input id="guide-search" type="text" placeholder="Search channels…" autocomplete="off" spellcheck="false">
+          <button id="guide-close" title="Close (Esc / G)">✕</button>
+        </div>
       </div>
       <div id="guide-grid"></div>
     </div>
@@ -215,6 +230,9 @@
     <button id="btn-next" title="Next channel (→)">&#9660;</button>
 
   </div>
+
+  <!-- Ambient cursor ring (visible on inactivity) -->
+  <div id="cursor-ring"></div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
   <script src="app.js"></script>
