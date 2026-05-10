@@ -621,26 +621,66 @@ var TV = {
 
   // ── Fullscreen ────────────────────────────────────────────────────────────
 
+  _theaterActive: false,
+
   toggleFullscreen: function() {
     var doc = document;
     var isFS = !!(doc.fullscreenElement || doc.webkitFullscreenElement);
-    if (!isFS) {
-      var elem = doc.documentElement;
-      if (elem.requestFullscreen) {
-        elem.requestFullscreen();
-      } else if (elem.webkitRequestFullscreen) {
-        elem.webkitRequestFullscreen();
-      } else {
-        var iframe = el('youtube-player').querySelector('iframe');
-        if (iframe) {
-          if (iframe.requestFullscreen) iframe.requestFullscreen();
-          else if (iframe.webkitRequestFullscreen) iframe.webkitRequestFullscreen();
-        }
-      }
-    } else {
+
+    if (this._theaterActive) { this._exitTheater(); return; }
+    if (isFS) {
       if (doc.exitFullscreen) doc.exitFullscreen();
       else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
+      return;
     }
+
+    var self = this;
+    var elem = doc.documentElement;
+    var p;
+    try {
+      if (elem.requestFullscreen) p = elem.requestFullscreen();
+      else if (elem.webkitRequestFullscreen) p = elem.webkitRequestFullscreen();
+    } catch (e) {}
+
+    if (!p) {
+      var iframe = el('youtube-player').querySelector('iframe');
+      if (iframe) {
+        try {
+          if (iframe.requestFullscreen) p = iframe.requestFullscreen();
+          else if (iframe.webkitRequestFullscreen) p = iframe.webkitRequestFullscreen();
+        } catch (e) {}
+      }
+    }
+
+    if (p && typeof p.then === 'function') {
+      p.then(null, function() { self._enterTheater(); });
+    } else if (!p) {
+      self._enterTheater();
+    }
+  },
+
+  _enterTheater: function() {
+    this._theaterActive = true;
+    document.body.classList.add('theater-fs');
+    el('icon-fs-enter').style.display = 'none';
+    el('icon-fs-exit').style.display = '';
+    window.scrollTo(0, 1);
+    this._showToast('For true fullscreen: Share → Add to Home Screen');
+  },
+
+  _exitTheater: function() {
+    this._theaterActive = false;
+    document.body.classList.remove('theater-fs');
+    el('icon-fs-enter').style.display = '';
+    el('icon-fs-exit').style.display = 'none';
+  },
+
+  _showToast: function(msg) {
+    var t = document.createElement('div');
+    t.className = 'toast-msg';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function() { t.classList.add('toast-fade'); setTimeout(function() { t.remove(); }, 600); }, 3000);
   },
 
   // ── Controls bar auto-hide ────────────────────────────────────────────────
@@ -791,6 +831,7 @@ var TV = {
     // Fullscreen icon swap
     function onFSChange() {
       var isFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      if (!isFS && TV._theaterActive) return; // theater mode controls its own icon
       el('icon-fs-enter').style.display = isFS ? 'none' : '';
       el('icon-fs-exit').style.display  = isFS ? '' : 'none';
     }
