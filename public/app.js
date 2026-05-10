@@ -920,14 +920,14 @@ async function api(url, opts) {
     headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
     body:    opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  if (res.status === 401) { location.href = '/'; throw new Error('Unauthenticated'); }
+  if (res.status === 401) { location.href = '/'; return new Promise(function() {}); }
   if (!res.ok) {
     var body = {};
     try { body = await res.json(); } catch (e) {}
     // YouTube scope not granted — send user back through OAuth to re-authorize
     if (res.status === 403 && body.error === 'reauth_required') {
       location.href = '/auth/login';
-      throw new Error('reauth');
+      return new Promise(function() {}); // navigation in progress; don't surface an error
     }
     var err = new Error(body.detail || body.error || ('HTTP ' + res.status));
     err.detail = body.detail || body.error;
