@@ -505,6 +505,17 @@ var TV = {
     document.addEventListener('mousemove', function(e) { if (seeking) seek(e); });
     document.addEventListener('mouseup',   function()  { seeking = false; });
     track.addEventListener('click', function(e) { seek(e); e.stopPropagation(); TV.showBackToLive(); });
+
+    track.addEventListener('touchstart', function(e) {
+      seeking = true;
+      seek({ clientX: e.touches[0].clientX });
+      e.stopPropagation(); e.preventDefault();
+      TV.showBackToLive();
+    }, { passive: false });
+    document.addEventListener('touchmove', function(e) {
+      if (seeking) { seek({ clientX: e.touches[0].clientX }); e.preventDefault(); }
+    }, { passive: false });
+    document.addEventListener('touchend', function() { seeking = false; });
   },
 
   // ── Options: scanlines / vignette / guide layout ─────────────────────────

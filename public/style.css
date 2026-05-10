@@ -385,3 +385,56 @@ body.cursor-hidden #btn-prev, body.cursor-hidden #btn-next { opacity: 0 !importa
 .guide-progress-fill { height: 100%; width: 0%; background: #FF0000; border-radius: 1px;
   transition: width 0.6s linear; }
 #guide-grid.list-layout .guide-progress { display: none; }
+
+/* ── Mobile (portrait + landscape) ───────────────────────────────────────── */
+@media (max-width: 600px) {
+  /* Larger touch targets throughout */
+  .ctrl-btn { padding: 9px; }
+
+  /* Volume slider takes 80 px the row can't afford — hide it; mute btn handles audio */
+  #ctrl-volume-slider { display: none; }
+
+  /* PiP is unsupported on mobile — keep it hidden regardless of initPip */
+  #ctrl-pip-btn { display: none !important; }
+
+  /* Shorten channel title so right-side buttons stay on screen */
+  #ctrl-title-label { max-width: 100px; }
+
+  /* Settings → full-width bottom sheet so it's always reachable */
+  #settings-panel {
+    left: 0; right: 0; bottom: 0;
+    border-radius: 16px 16px 0 0;
+    min-width: unset; max-height: 72vh; overflow-y: auto;
+    transform: translateY(calc(100% + 12px));   /* hidden: slide below viewport */
+  }
+  #settings-panel.open { transform: translateY(0); opacity: 1; pointer-events: auto; }
+
+  /* Seek thumb always visible on mobile (no hover) */
+  #ctrl-seek-thumb { opacity: 1; }
+
+  /* Guide search smaller */
+  #guide-search { width: 120px; }
+}
+
+/* ── Landscape on short screens (phones rotated) ─────────────────────────── */
+@media (max-height: 500px) {
+  /* Compact controls bar */
+  #controls-bar  { padding: 0 14px 6px; }
+  #ctrl-seek-row { padding: 5px 4px 3px; }
+
+  /* Settings panel: cap height + scroll so it fits */
+  #settings-panel { max-height: calc(100vh - 70px); overflow-y: auto; }
+  /* When shown as desktop popover (not bottom-sheet), keep it above controls */
+  @media (min-width: 601px) {
+    #settings-panel { bottom: 70px; }
+  }
+
+  /* Compact guide */
+  #guide-header { padding: 10px 18px; }
+  #guide-grid   { padding: 10px 18px; gap: 8px; }
+  .guide-card   { padding: 8px 10px; }
+
+  /* Shrink badge in landscape */
+  #badge-name  { font-size: 1rem; }
+  #badge-title { display: none; }
+}

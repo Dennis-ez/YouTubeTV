@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- TV cabinet -->
+  <rect x="1" y="5" width="30" height="20" rx="3" fill="#111"/>
+  <!-- Screen bezel -->
+  <rect x="3" y="7" width="26" height="16" rx="2" fill="#222"/>
+  <!-- Screen glow -->
+  <rect x="4" y="8" width="24" height="14" rx="1.5" fill="#FF0000"/>
+  <!-- Play triangle -->
+  <polygon points="12,11.5 12,19.5 22,15.5" fill="#fff"/>
+  <!-- Stand neck -->
+  <rect x="14" y="25" width="4" height="3" rx="1" fill="#111"/>
+  <!-- Stand base -->
+  <rect x="10" y="28" width="12" height="2.5" rx="1.5" fill="#111"/>
+</svg>
