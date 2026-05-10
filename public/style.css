@@ -438,3 +438,21 @@ body.cursor-hidden #btn-prev, body.cursor-hidden #btn-next { opacity: 0 !importa
   #badge-name  { font-size: 1rem; }
   #badge-title { display: none; }
 }
+
+/* ── Theater mode (iOS fullscreen fallback) ───────────────────────────────── */
+body.theater-fs #controls-bar { opacity: 0; pointer-events: none; transition: opacity 0.3s; }
+body.theater-fs #tv:hover #controls-bar,
+body.theater-fs #tv:active #controls-bar { opacity: 1; pointer-events: auto; }
+body.theater-fs #btn-prev,
+body.theater-fs #btn-next { opacity: 0; }
+body.theater-fs #channel-badge { opacity: 0; }
+
+/* ── Toast notification ──────────────────────────────────────────────────── */
+.toast-msg {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.82); color: #fff;
+  padding: 9px 16px; border-radius: 9px; font-size: 13px;
+  z-index: 9999; pointer-events: none; white-space: nowrap;
+  opacity: 1; transition: opacity 0.6s;
+}
+.toast-msg.toast-fade { opacity: 0; }
