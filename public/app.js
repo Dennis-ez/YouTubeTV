@@ -179,6 +179,8 @@ var TV = {
 
   // dir: +1 = forward, -1 = backward (controls which way we skip empty channels)
   tuneToChannel: async function(index, skipStatic, dir) {
+    var isHistoryNav = this._historyNav;   // capture before any await
+    this._historyNav = false;
     var n = this.channels.length;
     dir   = (dir !== undefined) ? dir : 1;
     index = ((index % n) + n) % n;
@@ -205,11 +207,10 @@ var TV = {
     if (!videos.length) { showError('No playable videos found in any channel.'); return; }
 
     // Commit — push old channel to history before overwriting currentIndex
-    if (!this._historyNav && this.currentIndex >= 0 && this.currentIndex !== i) {
+    if (!isHistoryNav && this.currentIndex >= 0 && this.currentIndex !== i) {
       this._channelHistory.push(this.currentIndex);
       if (this._channelHistory.length > 20) this._channelHistory.shift();
     }
-    this._historyNav = false;
     this.currentIndex = i;
     lsSet('ytv_lastCh', i);
 
@@ -239,15 +240,17 @@ var TV = {
     this.showInfoBar(this.channels[i], now.video);
     this.updateGuideActive();
 
-    // Re-apply captions state after video load
+    // Re-apply captions + speed after video load (player can reset them)
     var self = this;
     setTimeout(function() {
-      if (self.captionsOn && self.playerReady) {
+      if (!self.playerReady) return;
+      if (self.captionsOn) {
         self.player.loadModule('captions');
         self.player.setOption('captions', 'track', { languageCode: 'en' });
-      } else if (self.playerReady) {
+      } else {
         self.player.unloadModule('captions');
       }
+      if (self._speedIndex > 0) self.player.setPlaybackRate(self._speedOptions[self._speedIndex]);
     }, 1500);
   },
 
@@ -829,7 +832,8 @@ var TV = {
   resetWatched: async function() {
     await api('/api/watched', { method: 'DELETE' });
     this.watchedVideos.clear();
-    this.broadcasts = {};   // also reset broadcasts so fresh picks happen
+    this.broadcasts = {};
+    try { localStorage.removeItem('ytv_broadcasts'); } catch(e) {}
     var btn = el('opt-reset-watched');
     btn.textContent = 'Done!';
     setTimeout(function() { btn.textContent = 'Reset'; }, 2000);
@@ -910,7 +914,7 @@ var TV = {
       pipWin.document.body.appendChild(wrapper);
       btn.classList.add('active');
       pipWin.addEventListener('pagehide', function() {
-        if (!el('tv').contains(wrapper)) el('tv').insertBefore(wrapper, el('tv').firstChild);
+        if (!el('tv').contains(wrapper)) el('tv').appendChild(wrapper);
         btn.classList.remove('active');
       });
     } catch(e) { console.warn('PiP:', e); }
