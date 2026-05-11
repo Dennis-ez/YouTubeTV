@@ -4,9 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YouTube TV</title>
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="YouTube TV">
+  <link rel="manifest" href="manifest.json">
   <link rel="icon" href="favicon.ico" sizes="any">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAU0lEQVR42mNgGAUjAijRDNDXAmOqAuwW/GdgoAoaiRYAAc0tgACaW0CcTdSwAK811LMAh01DwgdDMBWNFhV0KK6Hco1GRtVN87YBXRscI9yCIQAAH403GS7amnsAAAAASUVORK5CYII=">
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -30,6 +35,7 @@
         Sign in with Google
       </a>
       <p class="hint">Your subscriptions become TV channels.<br>Videos start at a random timestamp — just like real TV.</p>
+      <a href="https://buymeacoffee.com" target="_blank" rel="noopener" class="bmc-link">☕ Buy me a coffee</a>
     </div>
   </div>
 
@@ -188,6 +194,10 @@
         <span>Sign out</span>
         <button class="action-btn danger" id="opt-signout">Sign out</button>
       </div>
+      <div class="setting-row">
+        <span>Support development</span>
+        <a href="https://buymeacoffee.com" target="_blank" rel="noopener" class="action-btn bmc-btn">☕ Coffee</a>
+      </div>
     </div>
 
     <!-- ── Keyboard shortcuts overlay ───────────────────── -->
@@ -238,5 +248,8 @@
 
   <script src="https://www.youtube.com/iframe_api"></script>
   <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+  </script>
 </body>
 </html>
