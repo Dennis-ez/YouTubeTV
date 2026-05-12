@@ -16,6 +16,7 @@ var TV = {
   // Each channel keeps a persistent "broadcast" that runs even while you're away.
   // Structure: { videoIndex, videoStartSec, broadcastStartMs }
   broadcasts:    {},
+  _pendingSeek:  null,   // { videoId, position } — seek on first PLAYING after tune
 
   // timers
   badgeTimer:        null,
@@ -227,6 +228,7 @@ var TV = {
     this.showBadge(i, now.video);
 
     if (this.playerReady) {
+      this._pendingSeek = { videoId: now.video.id, position: now.position };
       this.player.loadVideoById({ videoId: now.video.id, startSeconds: now.position });
     }
 
@@ -271,7 +273,16 @@ var TV = {
   // ── Player events ────────────────────────────────────────────────────────
 
   onStateChange: function(e) {
+    if (e.data === YT.PlayerState.PLAYING && this._pendingSeek) {
+      var ps = this._pendingSeek;
+      this._pendingSeek = null;
+      // startSeconds is only a hint; explicitly seek to guarantee the position
+      if (ps.position > 2 && this.player.getVideoData().video_id === ps.videoId) {
+        this.player.seekTo(ps.position, true);
+      }
+    }
     if (e.data === YT.PlayerState.ENDED) {
+      this._pendingSeek = null;
       // Re-tune to same channel — getBroadcastNow will have advanced past the
       // finished video because elapsed time now exceeds its duration.
       this.tuneToChannel(this.currentIndex, true, 1);
