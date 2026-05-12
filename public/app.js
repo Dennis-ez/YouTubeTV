@@ -158,20 +158,23 @@ var TV = {
   // Returns { video, position } representing where the channel is right now.
   getBroadcastNow: function(channelId, videos) {
     var b       = this.broadcasts[channelId];
-    var elapsed = (Date.now() - b.broadcastStartMs) / 1000;   // seconds since we pinned it
+    var elapsed = (Date.now() - b.broadcastStartMs) / 1000;
     var pos     = b.videoStartSec + elapsed;
     var idx     = b.videoIndex;
 
-    // Advance through the video list as videos finish
-    var laps = 0;
-    while (pos >= videos[idx].duration && laps < videos.length) {
-      pos  -= videos[idx].duration;
-      idx   = (idx + 1) % videos.length;
-      laps++;
+    // If enough time has passed to loop the whole playlist, wrap using modulo
+    // so we never fall back to position 0 on long-running broadcasts.
+    var total = videos.reduce(function(s, v) { return s + v.duration; }, 0);
+    if (total > 0 && pos >= total) {
+      pos = pos % total;
+      idx = 0;
     }
 
-    // Safety: if somehow we looped the entire list, start the pinned video over
-    if (laps >= videos.length) { idx = b.videoIndex; pos = 0; }
+    // Advance through the video list to find the current video + position.
+    while (pos >= videos[idx].duration) {
+      pos -= videos[idx].duration;
+      idx  = (idx + 1) % videos.length;
+    }
 
     return { video: videos[idx], position: Math.floor(Math.max(0, pos)) };
   },
@@ -276,8 +279,10 @@ var TV = {
     if (e.data === YT.PlayerState.PLAYING && this._pendingSeek) {
       var ps = this._pendingSeek;
       this._pendingSeek = null;
-      // startSeconds is only a hint; explicitly seek to guarantee the position
-      if (ps.position > 2 && this.player.getVideoData().video_id === ps.videoId) {
+      // startSeconds is only a hint — explicitly seek to guarantee the position.
+      // Don't check getVideoData().video_id; it isn't reliably populated on the
+      // first PLAYING event across all browsers.
+      if (ps.position > 2) {
         this.player.seekTo(ps.position, true);
       }
     }
